@@ -35,6 +35,7 @@ class InsightResponse(BaseModel):
         "Static category used",
     ])
     generated_at: datetime = Field(default_factory=datetime.utcnow)
+    rule_version: str = "unknown"
 
 
 class ChatContextPayloadRequest(BaseModel):

@@ -9,7 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.routers import auth, chat, compare, data_quality, metrics, rankings, rules, schemes
 from app.routers.alerts import router as alerts_router
-from app.routers.workspaces import router as workspaces_router, _interpret_router as workspace_interpret_router
+from app.routers.audit import router as audit_router
+from app.routers.reports import reports_router, compliance_router
+from app.routers.workspaces import (
+    router as workspaces_router,
+    _interpret_router as workspace_interpret_router,
+)
 from app.research_chat.router import router as research_chat_router
 from app.insights.router import router as insights_router
 from app.schemas.base import VersionedResponse
@@ -49,6 +54,9 @@ app.include_router(insights_router)
 app.include_router(alerts_router)
 app.include_router(workspaces_router)
 app.include_router(workspace_interpret_router)
+app.include_router(audit_router)
+app.include_router(reports_router)
+app.include_router(compliance_router)
 
 
 @app.get("/health", tags=["ops"])

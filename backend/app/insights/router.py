@@ -8,6 +8,7 @@ No LLM calls for page insight cards (ENABLE_LLM_PAGE_INSIGHT_POLISH = False).
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -30,6 +31,18 @@ from app.insights.snapshot_store import (
 )
 
 router = APIRouter(prefix="/insights", tags=["insights"])
+
+
+def _active_rule_version(db: Session) -> str:
+    """Return version_label of the currently active selfmade_rule_version."""
+    try:
+        row = db.execute(text(
+            "SELECT version_label FROM selfmade_rule_version WHERE is_active = true ORDER BY id DESC LIMIT 1"
+        )).fetchone()
+        return row[0] if row else "unknown"
+    except Exception:
+        return "unknown"
+
 
 POC_ASSUMPTIONS = [
     "Static benchmark mapping used",
@@ -115,6 +128,7 @@ def workspace_daily_briefing(
         poc_mode=True,
         assumptions=POC_ASSUMPTIONS,
         generated_at=datetime.utcnow(),
+        rule_version=_active_rule_version(db),
     )
 
 

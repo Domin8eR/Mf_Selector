@@ -58,10 +58,16 @@ class _FormulaVisitor(ast.NodeVisitor):
             fn = node.func.id
             if fn not in ALLOWED_FUNCTIONS:
                 self.bad_funcs.add(fn)
+            # Visit arguments directly — do NOT use generic_visit(node) because that
+            # would also visit node.func and treat the function name as a variable.
+            for arg in node.args:
+                self.visit(arg)
+            for kw in node.keywords:
+                self.visit(kw.value)
         else:
             # Attribute access, lambda, etc. — never allowed
             self.bad_nodes.append(type(node.func).__name__)
-        self.generic_visit(node)
+            self.generic_visit(node)
 
     def visit_BinOp(self, node: ast.BinOp) -> None:
         if not isinstance(node.op, _ALLOWED_BINOP):

@@ -28,8 +28,16 @@ _STATUS_CUTOFFS = [
     (0.00, "Weak"),
 ]
 
-LATEST_RULE_VERSION = "v1.0"
 SORT_BASIS = "RULE_ENGINE_V1"
+
+
+def _get_active_rule_version(db: "Session") -> str:
+    """Return the version_label of whichever selfmade_rule_version is currently active."""
+    from sqlalchemy import text as _text
+    row = db.execute(_text(
+        "SELECT version_label FROM selfmade_rule_version WHERE is_active = true ORDER BY id DESC LIMIT 1"
+    )).fetchone()
+    return row[0] if row else "v1.0"
 
 
 def _status_label(rank: int, total: int) -> str:
@@ -61,6 +69,7 @@ def recent_ranking_runs_v1(
         LIMIT :lim
     """), {"lim": limit}).fetchall()
 
+    active_rv = _get_active_rule_version(db)
     return {
         "runs": [
             {
@@ -69,7 +78,7 @@ def recent_ranking_runs_v1(
                 "fund_count": r[2],
                 "sort_basis": r[4] or SORT_BASIS,
                 "avg_score": round(float(r[3]), 2) if r[3] else None,
-                "rule_version": LATEST_RULE_VERSION,
+                "rule_version": active_rv,
                 "calculation_version": "2.0",
             }
             for r in rows
@@ -111,10 +120,11 @@ def get_category_rankings(
             WHERE category = :cat
         """), {"cat": category}).fetchone()
 
+    active_rv = _get_active_rule_version(db)
     if not snap_date_row or not snap_date_row[0]:
         return {
             "data_version": settings.data_version,
-            "rule_version": LATEST_RULE_VERSION,
+            "rule_version": active_rv,
             "calculation_version": "2.0",
             "as_of_date": str(date.today()),
             "evaluation_date": evaluation_date or str(date.today()),
@@ -187,7 +197,7 @@ def get_category_rankings(
 
     return {
         "data_version": settings.data_version,
-        "rule_version": LATEST_RULE_VERSION,
+        "rule_version": active_rv,
         "calculation_version": "2.0",
         "as_of_date": str(snap_date),
         "evaluation_date": str(snap_date),
@@ -486,7 +496,7 @@ def explain_fund_rank(
         "status_label": _status_label(rank, total_count),
         "composite_score": round(float(total_score or 0), 2),
         "contribution_sum": round(total_contribution, 4),
-        "rule_version": LATEST_RULE_VERSION,
+        "rule_version": _get_active_rule_version(db),
         "components": components,
         "data_version": settings.data_version,
         "calculation_version": "2.0",

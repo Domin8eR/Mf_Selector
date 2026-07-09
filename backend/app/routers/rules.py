@@ -107,6 +107,7 @@ def get_current_rules(
 
 @router.get("/versions")
 def list_versions(rule_set_id: str = "CLIENT-DEFAULT", db: Session = Depends(get_db)) -> list:
+    # Return stub for legacy v1 endpoint; real v2 list is GET /rules/all-versions
     return [_DEFAULT_VERSION]
 
 
@@ -531,6 +532,7 @@ class SubmitForApprovalRequest(BaseModel):
     rationale: str
     sandbox_run_summary: dict | None = None
     category: str = "Equity — Large Cap"
+    submitted_by: str = "Unknown"
 
 
 # ── GET /rules/default ────────────────────────────────────────────────────────
@@ -754,8 +756,9 @@ def sandbox_run_v2(
         f["fund_name"] for f in universe
         if f["schemecode"] in default_top10 and f["schemecode"] not in sandbox_top10
     ][:10]
-    changed  = len(default_top10.symmetric_difference(sandbox_top10))
-    turnover = (changed / 10) * 100 if default_top10 else 0.0
+    # Turnover = entering funds / top-10 size * 100 → 0–100% scale.
+    # (entering == leaving when both ranked sets are the same size, so either works.)
+    turnover = (len(entering) / 10) * 100 if default_top10 else 0.0
 
     return SandboxRunV2Response(
         data_version=settings.data_version,
@@ -814,9 +817,9 @@ def submit_for_approval(
     rv = db.execute(text("""
         INSERT INTO selfmade_rule_version
           (rule_set_id, version_label, is_active, status, rationale, sandbox_run_json,
-           change_note, created_at)
+           change_note, created_at, submitted_by)
         VALUES
-          (:rs_id, :label, false, 'pending_review', :rationale, :sb_json, :note, :now)
+          (:rs_id, :label, false, 'pending_review', :rationale, :sb_json, :note, :now, :submitted_by)
         RETURNING id, version_label, status, created_at
     """), {
         "rs_id":    rule_set_id,
@@ -825,6 +828,7 @@ def submit_for_approval(
         "sb_json":  json.dumps(body.sandbox_run_summary) if body.sandbox_run_summary else None,
         "note":     f"Sandbox submitted for approval — category: {body.category}",
         "now":      now,
+        "submitted_by": body.submitted_by.strip() or "Unknown",
     }).fetchone()
     db.commit()
 
@@ -861,3 +865,454 @@ def submit_for_approval(
             "Status is 'pending_review' — it is NOT the active default until approved."
         ),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Rule Approval & Version History governance endpoints
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from fastapi import HTTPException as _HTTPException
+
+
+def _version_components(db: "Session", rv_id: int) -> list[dict]:
+    rows = db.execute(text("""
+        SELECT metric_column, weight, direction, component_name, sort_order
+        FROM selfmade_rule_component WHERE rule_version_id = :rv_id
+        ORDER BY sort_order
+    """), {"rv_id": rv_id}).fetchall()
+    return [
+        {
+            "metric_column":  r[0],
+            "weight":         float(r[1]),
+            "weight_pct":     round(float(r[1]) * 100, 1),
+            "direction":      r[2],
+            "component_name": r[3],
+            "sort_order":     r[4],
+        }
+        for r in rows
+    ]
+
+
+def _get_active_version_row(db: "Session") -> dict | None:
+    row = db.execute(text("""
+        SELECT id, version_label FROM selfmade_rule_version
+        WHERE is_active = true ORDER BY id DESC LIMIT 1
+    """)).fetchone()
+    if not row:
+        return None
+    return {"id": row[0], "version_label": row[1]}
+
+
+def _write_audit_event(
+    db: "Session",
+    action: str,
+    actor: str,
+    rule_version_id: int,
+    comment: str | None,
+) -> None:
+    db.execute(text("""
+        INSERT INTO selfmade_audit_event (action, actor, rule_version_id, comment, created_at)
+        VALUES (:action, :actor, :rv_id, :comment, NOW())
+    """), {"action": action, "actor": actor, "rv_id": rule_version_id, "comment": comment})
+
+
+def _live_diff(active_comps: list[dict], proposed_comps: list[dict]) -> list[dict]:
+    """Compute per-component diff: current weight → proposed weight with change type."""
+    active_map = {c["metric_column"]: c for c in active_comps}
+    proposed_map = {c["metric_column"]: c for c in proposed_comps}
+    all_metrics = sorted(set(list(active_map.keys()) + list(proposed_map.keys())))
+    result = []
+    for metric in all_metrics:
+        old = active_map.get(metric)
+        new = proposed_map.get(metric)
+        old_w = old["weight"] if old else None
+        new_w = new["weight"] if new else None
+        name = (new or old or {}).get("component_name", metric)
+        change_type = (
+            "removed"   if new_w is None else
+            "added"     if old_w is None else
+            "changed"   if abs(new_w - old_w) > 0.0001 else
+            "unchanged"
+        )
+        result.append({
+            "metric_column":   metric,
+            "component_name":  name,
+            "current_weight":  old_w,
+            "proposed_weight": new_w,
+            "delta":           round(new_w - old_w, 4) if old_w is not None and new_w is not None else None,
+            "change_type":     change_type,
+        })
+    return result
+
+
+# ── GET /rules/pending ────────────────────────────────────────────────────────
+
+@router.get("/pending")
+def get_pending_versions(db: Session = Depends(get_db)) -> list[dict]:
+    """
+    All pending_review versions with a live diff against the current active version.
+    The diff is always computed at request time — not frozen at submission time.
+    """
+    pending_rows = db.execute(text("""
+        SELECT id, version_label, status, rationale, approved_by, approved_at,
+               created_at, submitted_by
+        FROM selfmade_rule_version
+        WHERE status = 'pending_review'
+        ORDER BY created_at DESC
+    """)).fetchall()
+
+    active = _get_active_version_row(db)
+    active_comps = _version_components(db, active["id"]) if active else []
+
+    result = []
+    for row in pending_rows:
+        rv_id, label, status, rationale, appr_by, appr_at, created_at, submitted_by = row
+        proposed_comps = _version_components(db, rv_id)
+        result.append({
+            "rule_version_id":       rv_id,
+            "version_label":         label,
+            "status":                status,
+            "submitted_by":          submitted_by,
+            "submitted_at":          created_at.isoformat() if created_at else None,
+            "rationale":             rationale,
+            "active_version_label":  active["version_label"] if active else None,
+            "diff":                  _live_diff(active_comps, proposed_comps),
+            "components":            proposed_comps,
+        })
+    return result
+
+
+# ── GET /rules/all-versions ───────────────────────────────────────────────────
+
+@router.get("/all-versions")
+def list_all_versions(db: Session = Depends(get_db)) -> list[dict]:
+    """
+    Full version timeline: every version regardless of status, newest first.
+    Includes published_on (approved_at), published_by (approved_by), submitted_at (created_at).
+    """
+    rows = db.execute(text("""
+        SELECT id, version_label, status, is_active, approved_by, approved_at,
+               created_at, submitted_by, rationale, parent_version_id
+        FROM selfmade_rule_version
+        ORDER BY id DESC
+    """)).fetchall()
+
+    result = []
+    for r in rows:
+        rv_id, label, status, is_active, pub_by, pub_on, created_at, sub_by, rationale, parent_id = r
+        result.append({
+            "id":              rv_id,
+            "version_label":   label,
+            "status":          status,
+            "is_current_default": bool(is_active),
+            "published_by":    pub_by,
+            "published_on":    pub_on.isoformat() if pub_on else None,
+            "submitted_by":    sub_by,
+            "submitted_at":    created_at.isoformat() if created_at else None,
+            "rationale":       rationale,
+            "parent_version_id": parent_id,
+        })
+    return result
+
+
+# ── GET /rules/all-versions/{id} ─────────────────────────────────────────────
+
+@router.get("/all-versions/{version_id}")
+def get_version_detail(version_id: int, db: Session = Depends(get_db)) -> dict:
+    """Single version detail: components, status, metadata, superseded_by pointer."""
+    row = db.execute(text("""
+        SELECT id, version_label, status, is_active, approved_by, approved_at,
+               created_at, submitted_by, rationale, parent_version_id, change_note
+        FROM selfmade_rule_version WHERE id = :id
+    """), {"id": version_id}).fetchone()
+
+    if not row:
+        raise _HTTPException(status_code=404, detail=f"Rule version {version_id} not found")
+
+    rv_id, label, status, is_active, pub_by, pub_on, created_at, sub_by, rationale, parent_id, note = row
+
+    # Find which version superseded this one (if it was ever active and is now superseded)
+    superseded_by = None
+    if status == "superseded":
+        sup_row = db.execute(text("""
+            SELECT id, version_label FROM selfmade_rule_version
+            WHERE approved_at > :pub_on AND (status = 'active' OR is_active = true)
+            ORDER BY approved_at ASC LIMIT 1
+        """), {"pub_on": pub_on or created_at}).fetchone()
+        if sup_row:
+            superseded_by = {"id": sup_row[0], "version_label": sup_row[1]}
+
+    return {
+        "id":                 rv_id,
+        "version_label":      label,
+        "status":             status,
+        "is_current_default": bool(is_active),
+        "published_by":       pub_by,
+        "published_on":       pub_on.isoformat() if pub_on else None,
+        "submitted_by":       sub_by,
+        "submitted_at":       created_at.isoformat() if created_at else None,
+        "rationale":          rationale,
+        "change_note":        note,
+        "parent_version_id":  parent_id,
+        "superseded_by":      superseded_by,
+        "components":         _version_components(db, rv_id),
+    }
+
+
+# ── Pydantic schemas for governance actions ───────────────────────────────────
+
+class ApproveRequest(BaseModel):
+    rule_version_id: int
+    approver_name: str
+    comment: str | None = None
+
+
+class RejectRequest(BaseModel):
+    rule_version_id: int
+    approver_name: str
+    comment: str
+
+
+class RequestChangesRequest(BaseModel):
+    rule_version_id: int
+    approver_name: str
+    comment: str
+
+
+class RevertRequest(BaseModel):
+    approver_name: str
+    comment: str | None = None
+
+
+# ── POST /rules/approve ───────────────────────────────────────────────────────
+
+@router.post("/approve")
+def approve_version(body: ApproveRequest, db: Session = Depends(get_db)) -> dict:
+    """
+    THE critical governance action. In one transaction:
+      1. Set the target version active, status=active.
+      2. Set the previously active version status=superseded (keep its row + components).
+      3. Write an audit_event row.
+    Returns the new active version's full detail.
+    """
+    if not body.approver_name or not body.approver_name.strip():
+        raise _HTTPException(status_code=422, detail="approver_name must not be blank")
+
+    target = db.execute(text("""
+        SELECT id, version_label, status FROM selfmade_rule_version WHERE id = :id
+    """), {"id": body.rule_version_id}).fetchone()
+
+    if not target:
+        raise _HTTPException(status_code=404, detail=f"Rule version {body.rule_version_id} not found")
+
+    if target[2] != "pending_review":
+        raise _HTTPException(
+            status_code=422,
+            detail=f"Version {body.rule_version_id} has status '{target[2]}'; only pending_review versions can be approved"
+        )
+
+    now = datetime.utcnow()
+    approver = body.approver_name.strip()
+
+    # Mark previous active version superseded
+    db.execute(text("""
+        UPDATE selfmade_rule_version
+        SET is_active = false, status = 'superseded'
+        WHERE is_active = true
+    """))
+
+    # Activate the target version
+    db.execute(text("""
+        UPDATE selfmade_rule_version
+        SET is_active = true, status = 'active',
+            approved_by = :approver, approved_at = :now
+        WHERE id = :id
+    """), {"approver": approver, "now": now, "id": body.rule_version_id})
+
+    _write_audit_event(db, "approved", approver, body.rule_version_id, body.comment)
+    db.commit()
+
+    return get_version_detail(body.rule_version_id, db)
+
+
+# ── POST /rules/reject ────────────────────────────────────────────────────────
+
+@router.post("/reject")
+def reject_version(body: RejectRequest, db: Session = Depends(get_db)) -> dict:
+    """
+    Mark a pending_review version as rejected. Does NOT touch the currently active version.
+    Rejected versions stay permanently in history (immutable audit trail).
+    """
+    if not body.approver_name or not body.approver_name.strip():
+        raise _HTTPException(status_code=422, detail="approver_name must not be blank")
+    if not body.comment or not body.comment.strip():
+        raise _HTTPException(status_code=422, detail="comment is required when rejecting")
+
+    target = db.execute(text("""
+        SELECT id, version_label, status FROM selfmade_rule_version WHERE id = :id
+    """), {"id": body.rule_version_id}).fetchone()
+
+    if not target:
+        raise _HTTPException(status_code=404, detail=f"Rule version {body.rule_version_id} not found")
+
+    if target[2] != "pending_review":
+        raise _HTTPException(
+            status_code=422,
+            detail=f"Version {body.rule_version_id} has status '{target[2]}'; only pending_review can be rejected"
+        )
+
+    approver = body.approver_name.strip()
+    db.execute(text("""
+        UPDATE selfmade_rule_version
+        SET status = 'rejected', approved_by = :approver, approved_at = NOW()
+        WHERE id = :id
+    """), {"approver": approver, "id": body.rule_version_id})
+
+    _write_audit_event(db, "rejected", approver, body.rule_version_id, body.comment)
+    db.commit()
+
+    return get_version_detail(body.rule_version_id, db)
+
+
+# ── POST /rules/request-changes ───────────────────────────────────────────────
+
+@router.post("/request-changes")
+def request_changes(body: RequestChangesRequest, db: Session = Depends(get_db)) -> dict:
+    """
+    Mark a pending_review version as changes_requested. Does NOT delete the version.
+    If the submitter wants another attempt, they submit a NEW sandbox from Rule Playground.
+    """
+    if not body.approver_name or not body.approver_name.strip():
+        raise _HTTPException(status_code=422, detail="approver_name must not be blank")
+    if not body.comment or not body.comment.strip():
+        raise _HTTPException(status_code=422, detail="comment is required when requesting changes")
+
+    target = db.execute(text("""
+        SELECT id, version_label, status FROM selfmade_rule_version WHERE id = :id
+    """), {"id": body.rule_version_id}).fetchone()
+
+    if not target:
+        raise _HTTPException(status_code=404, detail=f"Rule version {body.rule_version_id} not found")
+
+    if target[2] != "pending_review":
+        raise _HTTPException(
+            status_code=422,
+            detail=f"Version {body.rule_version_id} has status '{target[2]}'; only pending_review can have changes requested"
+        )
+
+    approver = body.approver_name.strip()
+    db.execute(text("""
+        UPDATE selfmade_rule_version
+        SET status = 'changes_requested', approved_by = :approver, approved_at = NOW()
+        WHERE id = :id
+    """), {"approver": approver, "id": body.rule_version_id})
+
+    _write_audit_event(db, "changes_requested", approver, body.rule_version_id, body.comment)
+    db.commit()
+
+    return get_version_detail(body.rule_version_id, db)
+
+
+# ── POST /rules/all-versions/{id}/revert ─────────────────────────────────────
+
+@router.post("/all-versions/{version_id}/revert")
+def revert_to_version(
+    version_id: int,
+    body: RevertRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Create a NEW version row copying the target version's components exactly, then activate it.
+    The old version row is NEVER modified (immutability). The currently active version is
+    set to superseded. Returns the new version's full detail.
+    """
+    if not body.approver_name or not body.approver_name.strip():
+        raise _HTTPException(status_code=422, detail="approver_name must not be blank")
+
+    target = db.execute(text("""
+        SELECT id, version_label, rule_set_id FROM selfmade_rule_version WHERE id = :id
+    """), {"id": version_id}).fetchone()
+
+    if not target:
+        raise _HTTPException(status_code=404, detail=f"Rule version {version_id} not found")
+
+    # Disallow reverting to yourself (i.e., the currently active version)
+    active = _get_active_version_row(db)
+    if active and active["id"] == version_id:
+        raise _HTTPException(
+            status_code=422,
+            detail="Cannot revert to the currently active version"
+        )
+
+    approver = body.approver_name.strip()
+    now = datetime.utcnow()
+    source_label = target[1]
+    rule_set_id = target[2]
+
+    # New label: revert-to-<source_label>
+    new_label = f"reverted-to-{source_label}"
+    # Make label unique if it already exists
+    existing = db.execute(text(
+        "SELECT COUNT(*) FROM selfmade_rule_version WHERE version_label LIKE :pattern"
+    ), {"pattern": f"{new_label}%"}).scalar() or 0
+    if existing > 0:
+        new_label = f"{new_label}-{int(existing) + 1}"
+
+    # Supersede the current active version
+    db.execute(text("""
+        UPDATE selfmade_rule_version
+        SET is_active = false, status = 'superseded'
+        WHERE is_active = true
+    """))
+
+    # Create the new reverted version
+    new_rv = db.execute(text("""
+        INSERT INTO selfmade_rule_version
+          (rule_set_id, version_label, is_active, status, approved_by, approved_at,
+           change_note, created_at, submitted_by, parent_version_id)
+        VALUES
+          (:rs_id, :label, true, 'active', :approver, :now,
+           :note, :now, :approver, :parent_id)
+        RETURNING id
+    """), {
+        "rs_id":     rule_set_id,
+        "label":     new_label,
+        "approver":  approver,
+        "now":       now,
+        "note":      f"Reverted to content of version '{source_label}' (id={version_id})",
+        "parent_id": version_id,
+    }).fetchone()
+    new_rv_id = new_rv[0]
+
+    # Copy all components from the source version to the new one
+    source_comps = db.execute(text("""
+        SELECT component_name, metric_column, metric_source, direction, weight,
+               label_display, sort_order
+        FROM selfmade_rule_component WHERE rule_version_id = :rv_id
+        ORDER BY sort_order
+    """), {"rv_id": version_id}).fetchall()
+
+    for comp in source_comps:
+        db.execute(text("""
+            INSERT INTO selfmade_rule_component
+              (rule_version_id, component_name, metric_column, metric_source,
+               direction, weight, label_display, sort_order)
+            VALUES (:rv_id, :name, :col, :src, :dir, :w, :label, :order)
+        """), {
+            "rv_id":  new_rv_id,
+            "name":   comp[0],
+            "col":    comp[1],
+            "src":    comp[2],
+            "dir":    comp[3],
+            "w":      comp[4],
+            "label":  comp[5],
+            "order":  comp[6],
+        })
+
+    _write_audit_event(
+        db, "reverted", approver, new_rv_id,
+        f"Reverted to '{source_label}' (source id={version_id}). {body.comment or ''}"
+    )
+    db.commit()
+
+    return get_version_detail(new_rv_id, db)

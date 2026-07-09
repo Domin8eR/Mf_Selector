@@ -1,0 +1,336 @@
+{
+  "Nifty 50 TRI": {
+    "status": "done",
+    "ticker": "^NSEI",
+    "rows": 3676,
+    "db_rows_inserted": 676,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.013,
+    "downloaded_at": "2026-06-30 15:45:12.166990"
+  },
+  "Nifty 100 TRI": {
+    "status": "done",
+    "ticker": "^CNX100",
+    "rows": 3684,
+    "db_rows_inserted": 2,
+    "db_duplicates_skipped": 3682,
+    "dividend_yield_used": 0.013,
+    "downloaded_at": "2026-06-30 15:45:13.564367"
+  },
+  "Nifty 200 TRI": {
+    "status": "done",
+    "ticker": "^CNX200",
+    "rows": 3689,
+    "db_rows_inserted": 689,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.013,
+    "downloaded_at": "2026-06-30 15:45:15.025216"
+  },
+  "Nifty 500 TRI": {
+    "status": "done",
+    "ticker": "^CRSLDX",
+    "rows": 3684,
+    "db_rows_inserted": 684,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.012,
+    "downloaded_at": "2026-06-30 15:45:16.561067"
+  },
+  "Nifty Next 50 TRI": {
+    "status": "done",
+    "ticker": "^NSMIDCP",
+    "rows": 3381,
+    "db_rows_inserted": 1,
+    "db_duplicates_skipped": 3380,
+    "dividend_yield_used": 0.011,
+    "downloaded_at": "2026-06-30 15:45:17.937332"
+  },
+  "Nifty LargeMidcap 250 TRI": {
+    "status": "not_found",
+    "tried_tickers": [
+      "NIFTY_LARGEMID250.NS",
+      "NIFTYLARGEMID250.NS"
+    ],
+    "checked_at": "2026-06-30 15:54:08.366981"
+  },
+  "Nifty Midcap 150 TRI": {
+    "status": "done",
+    "ticker": "NIFTYMIDCAP150.NS",
+    "rows": 1836,
+    "db_rows_inserted": 2,
+    "db_duplicates_skipped": 1834,
+    "dividend_yield_used": 0.009,
+    "downloaded_at": "2026-06-30 15:45:20.395660"
+  },
+  "Nifty Midcap 50 TRI": {
+    "status": "done",
+    "ticker": "^NSEMDCP50",
+    "rows": 3649,
+    "db_rows_inserted": 649,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.009,
+    "downloaded_at": "2026-06-30 15:45:21.863504"
+  },
+  "Nifty Smallcap 250 TRI": {
+    "status": "not_found",
+    "tried_tickers": [
+      "NIFTYSMLCAP250.NS"
+    ],
+    "checked_at": "2026-06-30 15:54:08.487990"
+  },
+  "Nifty Smallcap 100 TRI": {
+    "status": "not_found",
+    "tried_tickers": [
+      "^CNXSC",
+      "NIFTYSMLCAP100.NS"
+    ],
+    "checked_at": "2026-06-30 15:54:15.215804"
+  },
+  "Nifty MidSmallcap 400 TRI": {
+    "status": "not_found",
+    "tried_tickers": [
+      "NIFTYMIDSML400.NS"
+    ],
+    "checked_at": "2026-06-30 15:54:35.494691"
+  },
+  "Nifty Microcap 250 TRI": {
+    "status": "not_found",
+    "tried_tickers": [
+      "NIFTY_MICROCAP250.NS",
+      "NIFTYMICROCAP250.NS"
+    ],
+    "checked_at": "2026-06-30 15:54:42.549015"
+  },
+  "Nifty 500 Multicap 50:25:25 TRI": {
+    "status": "not_found",
+    "tried_tickers": [
+      "NIFTY500MULTICAP.NS",
+      "NIFTY500MULTICAP502525.NS",
+      "NIFTY500MULTICAP5025.NS",
+      "NIFTY500MULTICAP50.NS"
+    ],
+    "checked_at": "2026-06-30 15:55:09.699605"
+  },
+  "Nifty Financial Services TRI": {
+    "status": "done",
+    "ticker": "NIFTY_FIN_SERVICE.NS",
+    "rows": 3627,
+    "db_rows_inserted": 627,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.008,
+    "downloaded_at": "2026-06-30 15:45:27.127185"
+  },
+  "Nifty IT TRI": {
+    "status": "done",
+    "ticker": "^CNXIT",
+    "rows": 3690,
+    "db_rows_inserted": 690,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.018,
+    "downloaded_at": "2026-06-30 15:45:28.603448"
+  },
+  "Nifty Healthcare TRI": {
+    "status": "not_found",
+    "tried_tickers": [
+      "NIFTY_HEALTHCARE.NS"
+    ],
+    "checked_at": "2026-06-30 15:55:09.849043"
+  },
+  "Nifty Pharma TRI": {
+    "status": "done",
+    "ticker": "^CNXPHARMA",
+    "rows": 3689,
+    "db_rows_inserted": 689,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.007,
+    "downloaded_at": "2026-06-30 15:45:30.503802"
+  },
+  "Nifty Auto TRI": {
+    "status": "done",
+    "ticker": "^CNXAUTO",
+    "rows": 3666,
+    "db_rows_inserted": 666,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.01,
+    "downloaded_at": "2026-06-30 15:45:32.099116"
+  },
+  "Nifty Bank TRI": {
+    "status": "done",
+    "ticker": "^NSEBANK",
+    "rows": 3690,
+    "db_rows_inserted": 690,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.006,
+    "downloaded_at": "2026-06-30 15:45:33.598998"
+  },
+  "Nifty FMCG TRI": {
+    "status": "done",
+    "ticker": "^CNXFMCG",
+    "rows": 3673,
+    "db_rows_inserted": 673,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.015,
+    "downloaded_at": "2026-06-30 15:45:35.131029"
+  },
+  "Nifty Realty TRI": {
+    "status": "done",
+    "ticker": "^CNXREALTY",
+    "rows": 3674,
+    "db_rows_inserted": 674,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.005,
+    "downloaded_at": "2026-06-30 15:45:36.566324"
+  },
+  "Nifty Metal TRI": {
+    "status": "done",
+    "ticker": "^CNXMETAL",
+    "rows": 3666,
+    "db_rows_inserted": 666,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.02,
+    "downloaded_at": "2026-06-30 15:45:38.025861"
+  },
+  "Nifty Private Bank TRI": {
+    "status": "done",
+    "ticker": "NIFTY_PVT_BANK.NS",
+    "rows": 2520,
+    "db_rows_inserted": 520,
+    "db_duplicates_skipped": 2000,
+    "dividend_yield_used": 0.005,
+    "downloaded_at": "2026-06-30 15:45:39.492246"
+  },
+  "Nifty PSU Bank TRI": {
+    "status": "done",
+    "ticker": "^CNXPSUBANK",
+    "rows": 3674,
+    "db_rows_inserted": 674,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.015,
+    "downloaded_at": "2026-06-30 15:45:40.973140"
+  },
+  "Nifty Media TRI": {
+    "status": "done",
+    "ticker": "^CNXMEDIA",
+    "rows": 3649,
+    "db_rows_inserted": 649,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.008,
+    "downloaded_at": "2026-06-30 15:45:42.470252"
+  },
+  "Nifty Infrastructure TRI": {
+    "status": "done",
+    "ticker": "^CNXINFRA",
+    "rows": 3674,
+    "db_rows_inserted": 674,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.012,
+    "downloaded_at": "2026-06-30 15:45:43.956045"
+  },
+  "Nifty Energy TRI": {
+    "status": "done",
+    "ticker": "^CNXENERGY",
+    "rows": 3674,
+    "db_rows_inserted": 674,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.022,
+    "downloaded_at": "2026-06-30 15:45:45.393688"
+  },
+  "Nifty India Consumption TRI": {
+    "status": "done",
+    "ticker": "^CNXCONSUM",
+    "rows": 3664,
+    "db_rows_inserted": 664,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.013,
+    "downloaded_at": "2026-06-30 15:45:46.897849"
+  },
+  "Nifty MNC TRI": {
+    "status": "done",
+    "ticker": "^CNXMNC",
+    "rows": 3674,
+    "db_rows_inserted": 674,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.014,
+    "downloaded_at": "2026-06-30 15:45:48.371841"
+  },
+  "Nifty PSE TRI": {
+    "status": "done",
+    "ticker": "^CNXPSE",
+    "rows": 3674,
+    "db_rows_inserted": 674,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.025,
+    "downloaded_at": "2026-06-30 15:45:49.891132"
+  },
+  "Nifty Commodities TRI": {
+    "status": "done",
+    "ticker": "^CNXCMDT",
+    "rows": 3627,
+    "db_rows_inserted": 627,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.018,
+    "downloaded_at": "2026-06-30 15:45:51.392490"
+  },
+  "Nifty Services Sector TRI": {
+    "status": "done",
+    "ticker": "^CNXSERVICE",
+    "rows": 3674,
+    "db_rows_inserted": 674,
+    "db_duplicates_skipped": 3000,
+    "dividend_yield_used": 0.012,
+    "downloaded_at": "2026-06-30 15:45:52.955753"
+  },
+  "Nifty India Manufacturing TRI": {
+    "status": "not_found",
+    "tried_tickers": [
+      "NIFTY_INDIA_MFG.NS"
+    ],
+    "checked_at": "2026-06-30 15:55:09.961696"
+  },
+  "Nifty 100 ESG TRI": {
+    "status": "not_found",
+    "tried_tickers": [
+      "NIFTY100_ESG.NS"
+    ],
+    "checked_at": "2026-06-30 15:55:10.085312"
+  },
+  "Nifty 200 Momentum 30 TRI": {
+    "status": "not_found",
+    "tried_tickers": [
+      "NIFTY200MOMENTM30.NS"
+    ],
+    "checked_at": "2026-06-30 15:55:10.355280"
+  },
+  "Nifty 100 Low Volatility 30 TRI": {
+    "status": "not_found",
+    "tried_tickers": [
+      "NIFTY100LOWVOL30.NS"
+    ],
+    "checked_at": "2026-06-30 15:55:10.468264"
+  },
+  "Nifty 100 Quality 30 TRI": {
+    "status": "not_found",
+    "tried_tickers": [
+      "NIFTYQUALITY30.NS"
+    ],
+    "checked_at": "2026-06-30 15:55:10.730493"
+  },
+  "Nifty 50 Value 20 TRI": {
+    "status": "not_found",
+    "tried_tickers": [
+      "NIFTY50VALUE20.NS",
+      "NIFTYVALUE20.NS",
+      "NIFTY_VALUE20.NS"
+    ],
+    "checked_at": "2026-06-30 15:55:30.905361"
+  },
+  "Nifty Dividend Opportunities 50 TRI": {
+    "status": "not_found",
+    "tried_tickers": [
+      "NIFTYDIVOPPS50.NS",
+      "NIFTYDIVOPP50.NS",
+      "NIFTY_DIV_OPP_50.NS",
+      "NIFTYDIVIDEND50.NS"
+    ],
+    "checked_at": "2026-06-30 15:55:58.649539"
+  }
+}

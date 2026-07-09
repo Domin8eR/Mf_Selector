@@ -1,0 +1,1330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MFit — Core Product Wireframes v1</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{
+  --b50:#E6F1FB;--b100:#B5D4F4;--b200:#85B7EB;--b400:#378ADD;--b600:#185FA5;--b800:#0C447C;
+  --g50:#EAF3DE;--g200:#97C459;--g600:#3B6D11;--g800:#27500A;
+  --p50:#EEEDFE;--p100:#CECBF6;--p200:#AFA9EC;--p600:#534AB7;--p800:#3C3489;
+  --a50:#FAEEDA;--a200:#EF9F27;--a600:#854F0B;
+  --r50:#FCEBEB;--r200:#F09595;--r600:#A32D2D;
+  --gr50:#F1EFE8;--gr100:#D3D1C7;--gr200:#B4B2A9;--gr600:#5F5E5A;
+  --bg:#F5F4F0;--surf:#FFFFFF;--text:#18181A;--muted:#6B6A68;
+  --bd:rgba(0,0,0,0.09);--bd2:rgba(0,0,0,0.16);
+  --rm:8px;--rl:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:-apple-system,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);font-size:13px;line-height:1.4;}
+.app{display:flex;height:100vh;overflow:hidden;}
+.sidebar{width:52px;background:var(--surf);border-right:0.5px solid var(--bd2);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:2px;flex-shrink:0;z-index:20;}
+.logo{width:30px;height:30px;background:var(--b600);border-radius:7px;display:flex;align-items:center;justify-content:center;color:white;font-size:14px;font-weight:700;margin-bottom:10px;}
+.nb{width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:var(--rm);cursor:pointer;color:var(--muted);font-size:16px;border:none;background:transparent;position:relative;transition:all .12s;}
+.nb:hover{background:var(--gr50);color:var(--text);}
+.nb.active{background:var(--b50);color:var(--b600);}
+.nb .tip{position:absolute;left:44px;top:50%;transform:translateY(-50%);background:var(--surf);border:0.5px solid var(--bd2);padding:4px 9px;border-radius:var(--rm);font-size:11px;white-space:nowrap;display:none;z-index:100;color:var(--text);}
+.nb:hover .tip{display:block;}
+.sp{flex:1;}
+.nbb{position:relative;}
+.nbb::after{content:'';position:absolute;top:6px;right:6px;width:6px;height:6px;background:var(--a600);border-radius:50%;border:1.5px solid var(--surf);}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;}
+.topbar{height:44px;background:var(--surf);border-bottom:0.5px solid var(--bd2);display:flex;align-items:center;padding:0 16px;gap:10px;flex-shrink:0;}
+.bc{font-size:11px;color:var(--muted);}
+.pt{font-size:12px;font-weight:500;flex:1;}
+.aicmd{display:flex;align-items:center;gap:7px;background:var(--gr50);border:0.5px solid var(--bd2);border-radius:16px;padding:0 12px;height:28px;cursor:pointer;flex:0 0 300px;}
+.aicmd:hover{background:var(--b50);border-color:var(--b200);}
+.aicmd span{font-size:12px;color:var(--muted);flex:1;}
+.aicmd kbd{font-size:10px;color:var(--muted);background:var(--surf);border:0.5px solid var(--bd2);border-radius:3px;padding:1px 5px;}
+.avt{width:28px;height:28px;border-radius:50%;background:var(--b600);color:white;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;cursor:pointer;}
+.content{flex:1;overflow-y:auto;padding:16px;background:var(--bg);}
+.screen{display:none;}
+.screen.active{display:block;}
+.ab{background:var(--surf);border-top:0.5px solid var(--bd2);padding:10px 16px;display:flex;align-items:center;gap:8px;flex-shrink:0;}
+.zone{border-radius:var(--rl);padding:12px 14px;margin-bottom:10px;}
+.zb{background:var(--b50);border:0.5px solid var(--b200);}
+.zg{background:var(--g50);border:0.5px solid var(--g200);}
+.zp{background:var(--p50);border:0.5px solid var(--p200);}
+.za{background:var(--a50);border:0.5px solid var(--a200);}
+.zw{background:var(--surf);border:0.5px solid var(--bd2);}
+.zl{font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:5px;}
+.zb .zl{color:var(--b800);}
+.zg .zl{color:var(--g800);}
+.zp .zl{color:var(--p800);}
+.za .zl{color:var(--a600);}
+.zw .zl{color:var(--muted);}
+.sr{display:flex;align-items:center;gap:8px;margin-bottom:12px;}
+.step{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);}
+.sn{width:18px;height:18px;border-radius:50%;background:var(--gr50);border:0.5px solid var(--bd2);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;}
+.step.on .sn{background:var(--b600);color:white;border-color:var(--b600);}
+.step.on{color:var(--b600);font-weight:600;}
+.ss{color:var(--bd2);font-size:12px;}
+.g2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;}
+.g3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}
+.g4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;}
+.card{background:var(--surf);border:0.5px solid var(--bd2);border-radius:var(--rl);padding:12px 14px;}
+.mc{background:var(--gr50);border-radius:var(--rm);padding:10px 12px;}
+.mcl{font-size:10px;color:var(--muted);margin-bottom:2px;}
+.mcv{font-size:22px;font-weight:500;}
+.mcs{font-size:10px;color:var(--muted);margin-top:2px;}
+.b{display:inline-flex;align-items:center;gap:3px;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:500;white-space:nowrap;}
+.bb{background:var(--b50);color:var(--b800);border:0.5px solid var(--b200);}
+.bg{background:var(--g50);color:var(--g800);border:0.5px solid var(--g200);}
+.bp{background:var(--p50);color:var(--p800);border:0.5px solid var(--p200);}
+.ba{background:var(--a50);color:var(--a600);border:0.5px solid var(--a200);}
+.br{background:var(--r50);color:var(--r600);border:0.5px solid var(--r200);}
+.bgr{background:var(--gr50);color:var(--gr600);border:0.5px solid var(--gr100);}
+.btn{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border-radius:var(--rm);font-size:12px;font-weight:500;cursor:pointer;border:0.5px solid var(--bd2);background:transparent;color:var(--text);transition:all .12s;}
+.btn:hover{background:var(--gr50);}
+.btnp{background:var(--b600);color:white;border-color:var(--b600);}
+.btnp:hover{background:var(--b800);}
+.btns{background:var(--g600);color:white;border-color:var(--g600);}
+.btna{background:var(--p600);color:white;border-color:var(--p600);}
+.btnw{color:var(--a600);border-color:var(--a200);}
+.btnd{color:var(--r600);border-color:var(--r200);}
+.bsm{padding:4px 9px;font-size:11px;}
+table{width:100%;border-collapse:collapse;font-size:12px;}
+thead th{text-align:left;font-size:10px;font-weight:600;color:var(--muted);padding:6px 10px;border-bottom:0.5px solid var(--bd2);white-space:nowrap;cursor:pointer;user-select:none;letter-spacing:.03em;text-transform:uppercase;}
+thead th:hover{color:var(--text);}
+.si{margin-left:3px;opacity:.35;font-size:9px;}
+th.sd .si{opacity:1;color:var(--b600);}
+tbody td{padding:8px 10px;border-bottom:0.5px solid var(--bd);vertical-align:middle;}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr:hover td{background:var(--gr50);}
+tbody tr.sel td{background:var(--b50);}
+input[type=checkbox]{cursor:pointer;accent-color:var(--b600);width:13px;height:13px;}
+.rk{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;background:var(--gr50);color:var(--muted);border:0.5px solid var(--bd2);}
+.rk.top{background:var(--g50);color:var(--g800);border-color:var(--g200);}
+.sc{display:flex;align-items:center;gap:6px;}
+.st{width:56px;height:4px;background:var(--bd2);border-radius:2px;overflow:hidden;}
+.sf{height:100%;border-radius:2px;background:var(--b600);}
+.du{color:var(--g600);font-size:11px;font-weight:600;}
+.dd{color:var(--r600);font-size:11px;font-weight:600;}
+.df{color:var(--muted);font-size:11px;}
+.ir{display:flex;gap:7px;margin-bottom:7px;font-size:12px;line-height:1.5;}
+.ii{font-size:14px;flex-shrink:0;margin-top:1px;}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:12px;font-size:11px;border:0.5px solid var(--b200);background:var(--b50);color:var(--b800);cursor:pointer;margin:2px 3px 2px 0;}
+.chip:hover{background:var(--b100);}
+.hm{display:grid;grid-template-columns:repeat(12,1fr);gap:2px;margin-top:6px;}
+.hmc{height:22px;border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;}
+.hmG{background:var(--g50);color:var(--g800);border:0.5px solid var(--g200);}
+.hmGG{background:var(--g200);color:var(--g800);}
+.hmR{background:var(--r50);color:var(--r600);border:0.5px solid var(--r200);}
+.hmN{background:var(--gr50);color:var(--muted);border:0.5px solid var(--bd);}
+.rr{display:flex;align-items:center;gap:8px;padding:9px 11px;border-radius:var(--rm);background:var(--surf);border:0.5px solid var(--bd2);margin-bottom:5px;}
+.rr.ed{border-color:var(--b200);}
+.rr.mod{background:var(--b50);border-color:var(--b400);}
+.rn{flex:1;min-width:0;}
+.rnn{font-weight:500;font-size:12px;}
+.rnf{font-size:10px;color:var(--muted);font-family:monospace;margin-top:2px;}
+.rw{width:40px;text-align:right;font-weight:600;font-size:12px;color:var(--b600);}
+input[type=range]{-webkit-appearance:none;height:3px;background:var(--b200);border-radius:2px;outline:none;cursor:pointer;width:80px;}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--b600);cursor:pointer;border:2px solid white;box-shadow:0 0 0 1px var(--b200);}
+.cm{border-radius:var(--rl);padding:10px 13px;margin-bottom:8px;font-size:12px;line-height:1.55;}
+.cu{background:var(--b50);border:0.5px solid var(--b200);margin-left:48px;}
+.cai{background:var(--p50);border:0.5px solid var(--p200);margin-right:48px;}
+.cl{font-size:10px;font-weight:700;margin-bottom:5px;letter-spacing:.04em;text-transform:uppercase;}
+.cu .cl{color:var(--b600);}
+.cai .cl{color:var(--p600);}
+.sc2{display:inline-flex;align-items:center;gap:3px;font-size:10px;padding:2px 6px;border-radius:8px;background:var(--gr50);border:0.5px solid var(--bd2);color:var(--muted);margin:2px 2px 0 0;}
+.vi{display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:0.5px solid var(--bd);cursor:pointer;}
+.vi:last-child{border-bottom:none;}
+.vi.sel{background:var(--b50);margin:0 -14px;padding:9px 14px;border-radius:var(--rm);}
+.vd{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:5px;}
+.vt{font-weight:500;font-size:12px;}
+.vm{font-size:11px;color:var(--muted);margin-top:2px;}
+.dr{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:0.5px solid var(--bd);font-size:12px;}
+.dl{flex:1;font-weight:500;}
+.dold{text-decoration:line-through;color:var(--r600);background:var(--r50);padding:2px 5px;border-radius:3px;font-family:monospace;font-size:11px;}
+.dnew{color:var(--g800);background:var(--g50);padding:2px 5px;border-radius:3px;font-family:monospace;font-size:11px;}
+.wfr{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px;}
+.wfl{width:140px;color:var(--muted);text-align:right;flex-shrink:0;}
+.wft{flex:1;height:20px;background:var(--gr50);border-radius:2px;overflow:hidden;border:0.5px solid var(--bd);}
+.wfb{height:100%;display:flex;align-items:center;padding-left:7px;font-size:10px;font-weight:600;color:white;border-radius:2px;}
+.wftot{border-top:0.5px solid var(--bd2);margin-top:6px;padding-top:7px;display:flex;justify-content:space-between;font-size:13px;font-weight:600;}
+.er{display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:var(--rm);background:var(--surf);border:0.5px solid var(--bd2);margin-bottom:5px;font-size:12px;}
+.ed2{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+.en{font-weight:500;flex:1.2;}
+.ei{color:var(--muted);font-size:11px;flex:2;}
+.ea{color:var(--b600);font-size:11px;cursor:pointer;flex-shrink:0;}
+.lr{display:flex;gap:10px;padding:5px 0;border-bottom:0.5px solid var(--bd);font-size:11px;}
+.lk{color:var(--muted);width:110px;flex-shrink:0;}
+.lv{color:var(--text);}
+.lr:last-child{border-bottom:none;}
+.sh{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.st2{font-size:12px;font-weight:600;}
+.sa{font-size:11px;color:var(--b600);cursor:pointer;}
+.pr{display:flex;align-items:center;gap:7px;margin-bottom:6px;font-size:11px;}
+.pl{width:120px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.pt2{flex:1;height:5px;background:var(--bd2);border-radius:3px;overflow:hidden;}
+.pf{height:100%;border-radius:3px;}
+.pv{width:36px;text-align:right;font-weight:500;}
+.rpr{display:flex;align-items:center;gap:8px;padding:7px 11px;border-radius:var(--rm);background:var(--surf);border:0.5px solid var(--bd2);margin-bottom:4px;font-size:12px;}
+.tog{width:30px;height:17px;border-radius:9px;background:var(--b600);display:flex;align-items:center;padding:2px;cursor:pointer;flex-shrink:0;}
+.tog .td{width:13px;height:13px;border-radius:50%;background:white;margin-left:auto;}
+.tog.off{background:var(--gr100);}
+.tog.off .td{margin-left:2px;margin-right:auto;}
+.fh{display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:12px;margin-bottom:12px;border-bottom:0.5px solid var(--bd2);}
+.fn{font-size:16px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.fm{display:flex;gap:14px;font-size:11px;color:var(--muted);flex-wrap:wrap;}
+textarea{width:100%;border:0.5px solid var(--bd2);border-radius:var(--rm);padding:8px 10px;font-size:12px;font-family:inherit;resize:none;color:var(--text);background:var(--surf);}
+textarea:focus{outline:none;border-color:var(--b600);}
+.wto{padding:8px 11px;border-radius:var(--rm);display:flex;align-items:center;justify-content:space-between;font-size:12px;}
+.wtok{background:var(--g50);border:0.5px solid var(--g200);color:var(--g800);}
+.wtwarn{background:var(--a50);border:0.5px solid var(--a200);color:var(--a600);}
+.ptabs{display:flex;gap:4px;margin-bottom:10px;}
+.ptab{padding:4px 11px;border-radius:12px;font-size:11px;cursor:pointer;border:0.5px solid var(--bd2);background:transparent;color:var(--muted);}
+.ptab.active{background:var(--b600);color:white;border-color:var(--b600);}
+</style>
+</head>
+<body>
+<div class="app">
+<div class="sidebar">
+  <div class="logo">M</div>
+  <button class="nb active" onclick="show('home','AI Home','Command Center')" data-s="home"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg><span class="tip">AI Home</span></button>
+  <button class="nb" onclick="show('rankings','Category Rankings','Large Cap · Rule v3.2 · Nov 2024')" data-s="rankings"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg><span class="tip">Category Rankings</span></button>
+  <button class="nb" onclick="show('fund','Fund Detail','HDFC Large Cap Fund')" data-s="fund"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span class="tip">Fund Detail</span></button>
+  <button class="nb" onclick="show('compare','Fund Comparison','HDFC Large Cap vs SBI Bluechip')" data-s="compare"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/></svg><span class="tip">Fund Comparison</span></button>
+  <button class="nb" onclick="show('chat','Research Chat','Natural language fund research')" data-s="chat"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg><span class="tip">Research Chat</span></button>
+  <button class="nb" onclick="show('playground','Rule Playground','Sandbox · Large Cap · Rule v3.2')" data-s="playground"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg><span class="tip">Rule Playground</span></button>
+  <button class="nb" onclick="show('approval','Rule Approval','Review v3.3 — Pending')" data-s="approval"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span class="tip">Rule Approval</span></button>
+  <button class="nb" onclick="show('reports','Reports Builder','Large Cap Review · Nov 2024')" data-s="reports"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span class="tip">Reports Builder</span></button>
+  <button class="nb" onclick="show('quality','Data Quality','Fund universe · Nov 2024')" data-s="quality"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg><span class="tip">Data Quality</span></button>
+  <button class="nb" onclick="show('workspace','AI Workspace','Insight Lens — IR slope analysis')" data-s="workspace"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg><span class="tip">AI Workspace</span></button>
+  <div style="width:28px;height:0.5px;background:var(--bd2);margin:4px 0"></div>
+  <button class="nb" onclick="show('cmdpal','Command Palette','⌘K — expanded state')" data-s="cmdpal"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><span class="tip">⌘K Palette</span></button>
+  <button class="nb" onclick="show('formula','Formula Editor','Rule Playground — formula editor')" data-s="formula"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg><span class="tip">Formula Editor</span></button>
+  <button class="nb" onclick="show('admin','Admin — Data Operations','Firm data management')" data-s="admin"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg><span class="tip">Admin / Data Ops</span></button>
+  <button class="nb" onclick="show('empty','Empty &amp; Error States','Component states')" data-s="empty"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span class="tip">States</span></button>
+  <button class="nb" onclick="show('roles','Role-Aware Navigation','User roles and permissions')" data-s="roles"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg><span class="tip">Roles</span></button>
+  <button class="nb" onclick="show('notif','Notifications Panel','Alerts and approvals')" data-s="notif"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg><span class="tip">Notifications</span></button>
+  <div class="sp"></div>
+  <button class="nb nbb" title="Notifications"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg><span class="tip">Notifications (2)</span></button>
+  <button class="nb"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/></svg><span class="tip">Priya Sharma · RM</span></button>
+</div>
+<div class="main">
+<div class="topbar">
+  <span class="bc" id="bc">AI Home</span><span style="color:var(--bd2)"> / </span>
+  <span class="pt" id="pt">Command Center</span>
+  <div class="aicmd"><svg width="13" height="13" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg><span>Ask MFit anything...</span><kbd>⌘K</kbd></div>
+  <div class="avt">PS</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+<!-- SCREEN 1: AI HOME -->
+<div class="screen active content" id="screen-home">
+  <div class="sr"><div class="step on"><span class="sn">1</span> Ask MFit</div><span class="ss">›</span><div class="step"><span class="sn">2</span> Review result</div><span class="ss">›</span><div class="step"><span class="sn">3</span> Act</div></div>
+  <div class="zone zb">
+    <div class="zl">Step 1 — ask mfit</div>
+    <div style="display:flex;align-items:center;gap:8px;background:var(--surf);border:0.5px solid var(--b200);border-radius:var(--rm);padding:8px 12px;">
+      <svg width="15" height="15" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+      <span style="font-size:13px;color:var(--muted);flex:1;">Show top large-cap funds by client rule score this month</span>
+      <button class="btn btnp bsm">Run</button>
+    </div>
+    <div style="margin-top:8px;"><span class="chip">↑ Top mid-cap by IR slope</span><span class="chip">Funds with improving consistency</span><span class="chip">Funds that dropped rank</span><span class="chip">Compare SBI vs HDFC large cap</span></div>
+  </div>
+  <div class="g2">
+    <div>
+      <div class="zone zg">
+        <div class="zl">Step 2 — Large Cap · Rule v3.2 · Nov 2024</div>
+        <table><thead><tr><th style="width:30px"><input type="checkbox"></th><th>#</th><th>Fund name <span class="si">↕</span></th><th class="sd">Score <span class="si">↓</span></th><th>1Y IR <span class="si">↕</span></th><th>Δ Rank</th><th>Consistency</th></tr></thead>
+        <tbody>
+          <tr class="sel"><td><input type="checkbox" checked></td><td><div class="rk top">1</div></td><td style="font-weight:500">HDFC Large Cap</td><td><div class="sc"><div class="st"><div class="sf" style="width:88%"></div></div>88</div></td><td style="color:var(--g600);font-weight:500">1.42</td><td class="du">▲ 1</td><td><span class="b bg">High</span></td></tr>
+          <tr class="sel"><td><input type="checkbox" checked></td><td><div class="rk top">2</div></td><td style="font-weight:500">SBI Bluechip</td><td><div class="sc"><div class="st"><div class="sf" style="width:82%"></div></div>82</div></td><td style="color:var(--g600)">1.31</td><td class="df">— 0</td><td><span class="b bg">High</span></td></tr>
+          <tr><td><input type="checkbox"></td><td><div class="rk">3</div></td><td style="font-weight:500">Axis Bluechip</td><td><div class="sc"><div class="st"><div class="sf" style="width:76%"></div></div>76</div></td><td>1.18</td><td class="dd">▼ 1</td><td><span class="b bb">Medium</span></td></tr>
+          <tr><td><input type="checkbox"></td><td><div class="rk">4</div></td><td style="font-weight:500">Mirae Asset LC</td><td><div class="sc"><div class="st"><div class="sf" style="width:71%"></div></div>71</div></td><td>1.09</td><td class="df">— 0</td><td><span class="b bb">Medium</span></td></tr>
+        </tbody></table>
+        <div style="margin-top:8px;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)"><span style="color:var(--b800)">2 selected</span><span style="color:var(--b600);cursor:pointer">Compare →</span><span style="margin-left:auto"><span class="b bgr">Recalculated Nov 20, 2024</span></span></div>
+      </div>
+    </div>
+    <div>
+      <div class="zone zp" style="margin-bottom:10px">
+        <div class="zl">Why this matters — AI insight</div>
+        <div class="ir" style="color:var(--p800)"><svg class="ii" width="13" height="13" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>HDFC ranks #1 driven by improving 2Y IR slope (18/20 pts) and consistency (22/25 pts). Oct dip recovered strongly in Nov.</div>
+        <div class="ir"><svg class="ii" width="13" height="13" fill="none" stroke="var(--a600)" stroke-width="1.8" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/></svg>Axis dropped from rank 2 — short-term IR dip is the primary driver. Rules unchanged.</div>
+        <div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap"><span class="b bp" style="cursor:pointer">Explain rank</span><span class="b bp" style="cursor:pointer">Ask this table</span><span class="b bp" style="cursor:pointer">What changed?</span></div>
+      </div>
+      <div class="zone zw">
+        <div class="zl">Step 3 — actions</div>
+        <button class="btn btnp" style="width:100%;justify-content:center;margin-bottom:6px">Compare selected (2)</button>
+        <button class="btn" style="width:100%;justify-content:center;margin-bottom:6px">Generate report</button>
+        <button class="btn" style="width:100%;justify-content:center;margin-bottom:10px">Open rule playground</button>
+        <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px">Recent workspaces</div>
+        <div style="font-size:11px;color:var(--b600);padding:4px 0;cursor:pointer">⏱ Mid-cap IR slope workspace · Nov 18</div>
+        <div style="font-size:11px;color:var(--b600);padding:4px 0;cursor:pointer">⏱ Flexi-cap comparison · Nov 15</div>
+        <div style="font-size:11px;color:var(--b600);padding:4px 0;cursor:pointer">⏱ Small-cap DQ check · Nov 12</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: RANKINGS -->
+<div class="screen content" id="screen-rankings">
+  <div class="sr"><div class="step on"><span class="sn">1</span> Filter</div><span class="ss">›</span><div class="step"><span class="sn">2</span> Review rankings</div><span class="ss">›</span><div class="step"><span class="sn">3</span> Act</div></div>
+  <div class="g2">
+    <div>
+      <div class="zone zb" style="margin-bottom:10px">
+        <div class="zl">Step 1 — filters</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px;margin-bottom:8px">
+          <div><div style="color:var(--muted);margin-bottom:3px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Category</div><div style="background:var(--surf);border:0.5px solid var(--b400);border-radius:var(--rm);padding:6px 8px;font-weight:500">Large Cap ▾</div></div>
+          <div><div style="color:var(--muted);margin-bottom:3px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Benchmark</div><div style="background:var(--surf);border:0.5px solid var(--bd2);border-radius:var(--rm);padding:6px 8px">Nifty 50 TRI ▾</div></div>
+          <div><div style="color:var(--muted);margin-bottom:3px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Rule set</div><div style="background:var(--surf);border:0.5px solid var(--bd2);border-radius:var(--rm);padding:6px 8px">Default v3.2 ▾</div></div>
+          <div><div style="color:var(--muted);margin-bottom:3px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">As of date</div><div style="background:var(--surf);border:0.5px solid var(--bd2);border-radius:var(--rm);padding:6px 8px">Nov 2024 ▾</div></div>
+        </div>
+        <button class="btn btnp bsm">Run ranking</button><button class="btn bsm" style="margin-left:4px">Reset</button>
+      </div>
+      <div class="zone zp" style="margin-bottom:10px">
+        <div class="zl">AI discoveries</div>
+        <div class="ir" style="color:var(--p800)"><svg class="ii" width="13" height="13" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>HDFC Large Cap IR slope improved 3 consecutive months — momentum signal.</div>
+        <div class="ir"><svg class="ii" width="13" height="13" fill="none" stroke="var(--r600)" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg>Kotak Bluechip dropped 4 places — 1Y IR below category median for first time.</div>
+        <div class="ir"><svg class="ii" width="13" height="13" fill="none" stroke="var(--a600)" stroke-width="1.8" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>2 funds have stale NAV — rankings may be affected. <span style="color:var(--b600);cursor:pointer">Fix →</span></div>
+        <div style="margin-top:8px"><span class="b bp" style="cursor:pointer">Ask this list</span><span class="b bp" style="margin-left:4px;cursor:pointer">What changed?</span></div>
+      </div>
+      <div class="card">
+        <div class="sh"><span class="st2">Rank trend — 6 months</span><span class="b bgr">Jun–Nov 2024</span></div>
+        <svg viewBox="0 0 240 90" style="width:100%;height:90px">
+          <line x1="20" y1="5" x2="20" y2="75" stroke="#E8E8E4" stroke-width="0.5"/><line x1="60" y1="5" x2="60" y2="75" stroke="#E8E8E4" stroke-width="0.5"/><line x1="100" y1="5" x2="100" y2="75" stroke="#E8E8E4" stroke-width="0.5"/><line x1="140" y1="5" x2="140" y2="75" stroke="#E8E8E4" stroke-width="0.5"/><line x1="180" y1="5" x2="180" y2="75" stroke="#E8E8E4" stroke-width="0.5"/><line x1="220" y1="5" x2="220" y2="75" stroke="#E8E8E4" stroke-width="0.5"/>
+          <!-- HDFC: improving from 2→1 -->
+          <polyline points="20,42 60,42 100,42 140,42 180,28 220,14" fill="none" stroke="#185FA5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <!-- SBI: was 1, now 2 -->
+          <polyline points="20,14 60,14 100,14 140,14 180,42 220,28" fill="none" stroke="#3B6D11" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4,2"/>
+          <!-- Axis: stable 3 -->
+          <polyline points="20,56 60,56 100,42 140,56 180,56 220,56" fill="none" stroke="#B4B2A9" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2,2"/>
+          <!-- Kotak: declining 2→6 -->
+          <polyline points="20,28 60,42 100,56 140,70 180,70 220,70" fill="none" stroke="#A32D2D" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2,2"/>
+          <text x="223" y="16" font-size="8" fill="#185FA5" font-weight="600">HDFC #1</text>
+          <text x="223" y="30" font-size="8" fill="#3B6D11">SBI #2</text>
+          <text x="223" y="58" font-size="8" fill="#B4B2A9">Axis</text>
+          <text x="223" y="72" font-size="8" fill="#A32D2D">Kotak↓</text>
+          <text x="17" y="84" font-size="7" fill="#B4B2A9">Jun</text><text x="57" y="84" font-size="7" fill="#B4B2A9">Jul</text><text x="97" y="84" font-size="7" fill="#B4B2A9">Aug</text><text x="137" y="84" font-size="7" fill="#B4B2A9">Sep</text><text x="177" y="84" font-size="7" fill="#B4B2A9">Oct</text><text x="217" y="84" font-size="7" fill="#B4B2A9">Nov</text>
+        </svg>
+        <div style="font-size:9px;color:var(--muted);margin-top:2px">Lower position = better rank. Lines show each fund's rank month over month.</div>
+      </div>
+    </div>
+    <div>
+      <div class="zone zg">
+        <div class="zl">Step 2 — ranked results · 12 funds</div>
+        <table><thead><tr><th style="width:30px"><input type="checkbox"></th><th>#</th><th>Fund <span class="si">↕</span></th><th class="sd">Score <span class="si">↓</span></th><th>Δ Rank</th><th>1Y IR <span class="si">↕</span></th><th>Consistency</th></tr></thead>
+        <tbody>
+          <tr class="sel"><td><input type="checkbox" checked></td><td><div class="rk top">1</div></td><td style="font-weight:500">HDFC Large Cap</td><td><div class="sc"><div class="st"><div class="sf" style="width:88%"></div></div>88</div></td><td class="du">▲ 1</td><td style="color:var(--g600);font-weight:500">1.42</td><td><span class="b bg">High</span></td></tr>
+          <tr class="sel"><td><input type="checkbox" checked></td><td><div class="rk top">2</div></td><td style="font-weight:500">SBI Bluechip</td><td><div class="sc"><div class="st"><div class="sf" style="width:82%"></div></div>82</div></td><td class="df">— 0</td><td style="color:var(--g600)">1.31</td><td><span class="b bg">High</span></td></tr>
+          <tr><td><input type="checkbox"></td><td><div class="rk top">3</div></td><td style="font-weight:500">Axis Bluechip</td><td><div class="sc"><div class="st"><div class="sf" style="width:76%"></div></div>76</div></td><td class="dd">▼ 1</td><td>1.18</td><td><span class="b bb">Medium</span></td></tr>
+          <tr><td><input type="checkbox"></td><td><div class="rk">4</div></td><td style="font-weight:500">Mirae Asset LC</td><td><div class="sc"><div class="st"><div class="sf" style="width:71%"></div></div>71</div></td><td class="df">— 0</td><td>1.09</td><td><span class="b bb">Medium</span></td></tr>
+          <tr><td><input type="checkbox"></td><td><div class="rk">5</div></td><td style="font-weight:500">Nippon Large Cap</td><td><div class="sc"><div class="st"><div class="sf" style="width:65%"></div></div>65</div></td><td class="du">▲ 2</td><td>0.98</td><td><span class="b bgr">Low</span></td></tr>
+          <tr><td><input type="checkbox"></td><td><div class="rk">6</div></td><td style="font-weight:500">Kotak Bluechip</td><td><div class="sc"><div class="st"><div class="sf" style="width:58%"></div></div>58</div></td><td class="dd">▼ 4</td><td style="color:var(--r600)">0.84</td><td><span class="b ba">Review</span></td></tr>
+        </tbody></table>
+        <div style="margin-top:8px;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:8px"><span>2 of 12 selected</span><span style="color:var(--b600);cursor:pointer">Select all</span><span style="margin-left:auto;color:var(--b600);cursor:pointer">Load 6 more ↓</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="ab"><button class="btn btnp">Compare selected (2)</button><button class="btn">Open fund detail</button><button class="btn">Export list</button><button class="btn">Generate report</button><div style="margin-left:auto;display:flex;gap:6px"><span class="b bgr">12 funds · Nov 20, 2024</span><span class="b ba">2 data warnings</span></div></div>
+</div>
+
+<!-- SCREEN 3: FUND DETAIL -->
+<div class="screen content" id="screen-fund">
+  <div class="fh">
+    <div>
+      <div class="fn">HDFC Large Cap Fund<span class="b bg">Rank #1</span><span class="b bb">Large Cap</span><span class="b bgr">Rule v3.2</span></div>
+      <div class="fm"><span>HDFC AMC</span><span>Launch: Jan 2003</span><span>AUM: ₹24,300 Cr</span><span>Benchmark: Nifty 50 TRI</span><span>Expense: 0.89%</span><span style="color:var(--b600);font-weight:600">Score: 88 / 100</span></div>
+    </div>
+    <div style="display:flex;gap:6px"><button class="btn bsm">Compare</button><button class="btn btnp bsm">Generate report</button></div>
+  </div>
+  <div class="g2">
+    <div>
+      <div class="card" style="margin-bottom:10px">
+        <div class="sh">
+          <span class="st2">Rolling Information Ratio</span>
+          <div class="ptabs"><span class="ptab active">1Y</span><span class="ptab">3Y</span><span class="ptab">5Y</span></div>
+        </div>
+        <div style="height:130px;position:relative"><canvas id="irChart"></canvas></div>
+        <div style="display:flex;gap:12px;margin-top:6px;font-size:10px;color:var(--muted)">
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:2px;background:var(--b600);display:inline-block"></span>Fund IR</span>
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:2px;background:var(--gr200);display:inline-block"></span>Benchmark baseline (0.0)</span>
+          <span style="margin-left:auto;color:var(--b600);cursor:pointer;font-size:11px">Ask this chart →</span>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:10px">
+        <div class="sh"><span class="st2">Monthly IR consistency — 12 months</span><span class="b bgr">Dec 23 – Nov 24</span></div>
+        <div class="hm">
+          <div class="hmc hmGG">D</div><div class="hmc hmG">J</div><div class="hmc hmGG">F</div><div class="hmc hmR">M</div><div class="hmc hmG">A</div><div class="hmc hmGG">M</div><div class="hmc hmG">J</div><div class="hmc hmGG">J</div><div class="hmc hmG">A</div><div class="hmc hmR">S</div><div class="hmc hmR">O</div><div class="hmc hmGG">N</div>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:6px;font-size:10px;color:var(--muted)">
+          <span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:var(--g200);border-radius:2px;display:inline-block"></span>Above benchmark</span>
+          <span style="display:flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:var(--r200);border-radius:2px;display:inline-block"></span>Below benchmark</span>
+          <span style="margin-left:auto">10/12 months positive</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="sh"><span class="st2">Score contribution — what drives rank #1</span><span class="b bp" style="cursor:pointer">Explain rank</span></div>
+        <div class="wfr"><span class="wfl">2Y IR Slope (20%)</span><div class="wft"><div class="wfb" style="width:90%;background:var(--b600)">18 / 20</div></div></div>
+        <div class="wfr"><span class="wfl">IR Consistency (25%)</span><div class="wft"><div class="wfb" style="width:88%;background:var(--b400)">22 / 25</div></div></div>
+        <div class="wfr"><span class="wfl">3Y Info Ratio (30%)</span><div class="wft"><div class="wfb" style="width:80%;background:var(--b200);color:var(--b800)">24 / 30</div></div></div>
+        <div class="wfr"><span class="wfl">AUM Stability (15%)</span><div class="wft"><div class="wfb" style="width:87%;background:var(--g200);color:var(--g800)">13 / 15</div></div></div>
+        <div class="wfr"><span class="wfl">Expense Ratio (10%)</span><div class="wft"><div class="wfb" style="width:70%;background:var(--gr100);color:var(--gr600)">7 / 10</div></div></div>
+        <div class="wftot"><span>Total rule score</span><span style="color:var(--b600)">84 / 100 (→88 after confidence weighting)</span></div>
+      </div>
+    </div>
+    <div>
+      <div class="zone zp" style="margin-bottom:10px">
+        <div class="zl">AI insight</div>
+        <div class="ir" style="color:var(--p800)"><svg class="ii" width="13" height="13" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>Ranked #1 under rule v3.2. Key driver: improving 2Y IR slope for 3 consecutive months. Oct dip was noise — Nov recovered strongly.</div>
+        <div class="ir"><svg class="ii" width="13" height="13" fill="none" stroke="var(--a600)" stroke-width="1.8" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>Watch: expense ratio (0.89%) is slightly above category avg (0.78%). Minor drag on score.</div>
+        <div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap"><span class="b bp" style="cursor:pointer">Data lineage</span><span class="b bp" style="cursor:pointer">What changed?</span><span class="b bp" style="cursor:pointer">Ask this chart</span></div>
+      </div>
+      <div class="card" style="margin-bottom:10px">
+        <div class="sh"><span class="st2">Top holdings</span><span class="sa">View all 42</span></div>
+        <div class="pr"><span class="pl">Reliance Industries</span><div class="pt2"><div class="pf" style="width:75%;background:var(--b200)"></div></div><span class="pv">9.4%</span></div>
+        <div class="pr"><span class="pl">HDFC Bank</span><div class="pt2"><div class="pf" style="width:62%;background:var(--b200)"></div></div><span class="pv">7.8%</span></div>
+        <div class="pr"><span class="pl">Infosys</span><div class="pt2"><div class="pf" style="width:50%;background:var(--b200)"></div></div><span class="pv">6.2%</span></div>
+        <div class="pr"><span class="pl">ICICI Bank</span><div class="pt2"><div class="pf" style="width:44%;background:var(--b200)"></div></div><span class="pv">5.5%</span></div>
+        <div class="pr"><span class="pl">TCS</span><div class="pt2"><div class="pf" style="width:38%;background:var(--b200)"></div></div><span class="pv">4.8%</span></div>
+      </div>
+      <div class="card" style="margin-bottom:10px">
+        <div class="sh"><span class="st2">Sector exposure</span><span class="sa">Full analysis</span></div>
+        <div class="pr"><span class="pl">Financial Services</span><div class="pt2"><div class="pf" style="width:38%;background:var(--p200)"></div></div><span class="pv">38%</span></div>
+        <div class="pr"><span class="pl">Technology</span><div class="pt2"><div class="pf" style="width:22%;background:var(--p200)"></div></div><span class="pv">22%</span></div>
+        <div class="pr"><span class="pl">Energy</span><div class="pt2"><div class="pf" style="width:14%;background:var(--p200)"></div></div><span class="pv">14%</span></div>
+        <div class="pr"><span class="pl">Consumer</span><div class="pt2"><div class="pf" style="width:11%;background:var(--p200)"></div></div><span class="pv">11%</span></div>
+      </div>
+      <div class="card">
+        <div class="sh"><span class="st2">Document evidence</span><span class="sa">View all</span></div>
+        <div style="font-size:11px">
+          <div style="display:flex;gap:8px;padding:5px 0;border-bottom:0.5px solid var(--bd)"><span style="flex:1;color:var(--b600);cursor:pointer">📄 Factsheet Nov 2024</span><span class="b bgr">PDF</span></div>
+          <div style="display:flex;gap:8px;padding:5px 0"><span style="flex:1;color:var(--b600);cursor:pointer">📄 SID — Scheme information document</span><span class="b bgr">PDF</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="ab"><button class="btn btnp">Compare with another fund</button><button class="btn">Generate report</button><button class="btn">Build rule from this</button><div style="margin-left:auto"><button class="btn bsm">← Back to rankings</button></div></div>
+</div>
+<!-- SCREEN 4: FUND COMPARISON -->
+<div class="screen content" id="screen-compare">
+  <div class="sr"><div class="step on"><span class="sn">1</span> Select funds</div><span class="ss">›</span><div class="step on"><span class="sn">2</span> Compare metrics</div><span class="ss">›</span><div class="step"><span class="sn">3</span> Act</div></div>
+  <div class="zone zb" style="margin-bottom:10px">
+    <div class="zl">Step 1 — funds selected</div>
+    <div style="display:flex;gap:8px">
+      <div style="flex:1;background:var(--surf);border:1.5px solid var(--b600);border-radius:var(--rm);padding:8px 12px;font-size:12px"><div style="font-weight:600;color:var(--b800)">A — HDFC Large Cap</div><div style="color:var(--muted);font-size:10px;margin-top:2px">Rank #1 · Score 88 · HDFC AMC</div></div>
+      <div style="flex:1;background:var(--surf);border:1.5px solid var(--g600);border-radius:var(--rm);padding:8px 12px;font-size:12px"><div style="font-weight:600;color:var(--g800)">B — SBI Bluechip</div><div style="color:var(--muted);font-size:10px;margin-top:2px">Rank #2 · Score 82 · SBI MF</div></div>
+      <div style="flex:0.5;background:var(--surf);border:0.5px dashed var(--bd2);border-radius:var(--rm);padding:8px 12px;font-size:11px;display:flex;align-items:center;justify-content:center;color:var(--muted);cursor:pointer">+ Add fund</div>
+    </div>
+  </div>
+  <div class="g2">
+    <div>
+      <div class="zone zg" style="margin-bottom:10px">
+        <div class="zl">Step 2 — metrics comparison</div>
+        <table><thead><tr><th>Metric</th><th>A — HDFC</th><th>B — SBI</th><th>Winner</th></tr></thead>
+        <tbody>
+          <tr><td>Rule score</td><td style="color:var(--g600);font-weight:600">88</td><td>82</td><td><span class="b bg">A</span></td></tr>
+          <tr><td>1Y IR</td><td style="color:var(--g600);font-weight:600">1.42</td><td>1.31</td><td><span class="b bg">A</span></td></tr>
+          <tr><td>3Y IR</td><td style="color:var(--g600);font-weight:600">1.28</td><td>1.19</td><td><span class="b bg">A</span></td></tr>
+          <tr><td>IR slope (2Y)</td><td style="color:var(--g600)">↑ Improving</td><td style="color:var(--muted)">→ Flat</td><td><span class="b bg">A</span></td></tr>
+          <tr><td>Consistency</td><td>10/12 months</td><td>10/12 months</td><td><span class="b bgr">Tied</span></td></tr>
+          <tr><td>AUM (Cr)</td><td>24,300</td><td style="color:var(--g600);font-weight:600">31,200</td><td><span class="b bg">B</span></td></tr>
+          <tr><td>Expense ratio</td><td>0.89%</td><td style="color:var(--g600);font-weight:600">0.76%</td><td><span class="b bg">B</span></td></tr>
+          <tr><td>Fund age</td><td>21 yrs</td><td>19 yrs</td><td><span class="b bg">A</span></td></tr>
+        </tbody></table>
+      </div>
+      <div class="zone zp">
+        <div class="zl">AI comparison summary</div>
+        <div class="ir" style="color:var(--p800)"><svg class="ii" width="13" height="13" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>HDFC outperforms on 5 of 8 rule-weighted metrics. IR slope advantage is the key differentiator — improving momentum vs SBI's flat trend.</div>
+        <div class="ir"><svg class="ii" width="13" height="13" fill="none" stroke="var(--b400)" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>SBI's lower expense ratio (0.76%) and higher AUM may be preferred for large-ticket mandates.</div>
+        <div style="margin-top:8px"><span class="b bp" style="cursor:pointer">Generate comparison report</span></div>
+      </div>
+    </div>
+    <div>
+      <div class="card" style="margin-bottom:10px">
+        <div class="sh"><span class="st2">IR trend — 12 months</span><span class="sa">Ask this chart</span></div>
+        <div style="height:120px;position:relative"><canvas id="compareChart"></canvas></div>
+        <div style="display:flex;gap:12px;margin-top:6px;font-size:10px;color:var(--muted)">
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:2px;background:var(--b600);display:inline-block"></span>HDFC LC</span>
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:2px;background:var(--g600);display:inline-block"></span>SBI BC</span>
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:1px;background:var(--gr200);display:inline-block"></span>0.0 baseline</span>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:10px">
+        <div class="sh"><span class="st2">Rank movement — 6 months</span></div>
+        <svg viewBox="0 0 240 70" style="width:100%;height:70px">
+          <line x1="20" y1="5" x2="20" y2="60" stroke="#E8E8E4" stroke-width="0.5"/><line x1="68" y1="5" x2="68" y2="60" stroke="#E8E8E4" stroke-width="0.5"/><line x1="116" y1="5" x2="116" y2="60" stroke="#E8E8E4" stroke-width="0.5"/><line x1="164" y1="5" x2="164" y2="60" stroke="#E8E8E4" stroke-width="0.5"/><line x1="212" y1="5" x2="212" y2="60" stroke="#E8E8E4" stroke-width="0.5"/>
+          <polyline points="20,35 68,35 116,35 164,35 212,12" fill="none" stroke="#185FA5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <polyline points="20,12 68,12 116,12 164,12 212,35" fill="none" stroke="#3B6D11" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4,2"/>
+          <text x="215" y="14" font-size="8" fill="#185FA5" font-weight="600">HDFC #1 ↑</text>
+          <text x="215" y="37" font-size="8" fill="#3B6D11">SBI #2</text>
+          <text x="17" y="68" font-size="7" fill="#B4B2A9">Jun</text><text x="109" y="68" font-size="7" fill="#B4B2A9">Aug</text><text x="209" y="68" font-size="7" fill="#B4B2A9">Nov</text>
+        </svg>
+      </div>
+      <div class="zone zw">
+        <div class="zl">Step 3 — actions</div>
+        <button class="btn btnp" style="width:100%;justify-content:center;margin-bottom:6px">Generate comparison report</button>
+        <button class="btn" style="width:100%;justify-content:center;margin-bottom:6px">Open HDFC fund detail</button>
+        <button class="btn" style="width:100%;justify-content:center">Add both to watchlist</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 5: RESEARCH CHAT -->
+<div class="screen content" id="screen-chat">
+  <div class="g2" style="align-items:start">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="zone zb">
+        <div class="zl">Example questions</div>
+        <div><span class="chip">SBI schemes below ₹1000 Cr AUM</span><span class="chip">Common holdings: SBI Mid vs BNP</span><span class="chip">HDFC Large Cap IT exposure</span><span class="chip">Funds with improving IR slope</span><span class="chip">Sort top 100 funds by AUM ↓</span></div>
+      </div>
+      <div class="cm cu"><div class="cl">You</div>List all SBI schemes with AUM below ₹1000 Cr, sorted by AUM descending.</div>
+      <div class="cm cai">
+        <div class="cl">MFit Research</div>
+        Found 7 SBI schemes with AUM below ₹1,000 Cr. Top 4:
+        <table style="margin-top:8px;font-size:11px"><thead><tr><th>#</th><th>Scheme</th><th>AUM (Cr)</th><th>Category</th><th>Rank</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>SBI Small Cap</td><td>887</td><td>Small Cap</td><td><span class="b bg">12</span></td></tr>
+          <tr><td>2</td><td>SBI Contra</td><td>742</td><td>Contra</td><td>—</td></tr>
+          <tr><td>3</td><td>SBI Dividend Yield</td><td>614</td><td>Div. Yield</td><td>—</td></tr>
+          <tr><td>4</td><td>SBI Healthcare Opp.</td><td>390</td><td>Sectoral</td><td>—</td></tr>
+        </tbody></table>
+        <div style="margin-top:8px;font-size:11px;color:var(--muted)">Sources: <span class="sc2">Fund universe DB</span><span class="sc2">AMFI Nov 2024 AUM</span></div>
+        <div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap"><span class="b bp" style="cursor:pointer">Visualise as chart</span><span class="b bb" style="cursor:pointer">Export table</span><span class="b bb" style="cursor:pointer">Build rule from this</span></div>
+      </div>
+      <div class="cm cu"><div class="cl">You</div>Show common holdings between SBI Small Cap and Nippon Small Cap.</div>
+      <div class="cm cai">
+        <div class="cl">MFit Research</div>
+        Found 8 common holdings. Top overlap by avg portfolio weight:
+        <div style="margin-top:6px;font-size:11px">
+          <div class="pr"><span class="pl">Dixon Technologies</span><div class="pt2"><div class="pf" style="width:60%;background:var(--p200)"></div></div><span class="pv">3.2%</span></div>
+          <div class="pr"><span class="pl">Tube Investments</span><div class="pt2"><div class="pf" style="width:45%;background:var(--p200)"></div></div><span class="pv">2.4%</span></div>
+          <div class="pr"><span class="pl">Kaynes Technology</span><div class="pt2"><div class="pf" style="width:35%;background:var(--p200)"></div></div><span class="pv">1.9%</span></div>
+        </div>
+        <div style="margin-top:6px;font-size:11px;color:var(--muted)">Sources: <span class="sc2">Holdings Nov 2024</span><span class="sc2">Portfolio overlap engine</span></div>
+      </div>
+      <div style="background:var(--surf);border:0.5px solid var(--b200);border-radius:var(--rl);padding:8px 12px;display:flex;gap:8px;align-items:center">
+        <svg width="14" height="14" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        <span style="font-size:12px;color:var(--muted);flex:1">Ask a follow-up question...</span>
+        <button class="btn btna bsm">Send</button>
+      </div>
+    </div>
+    <div>
+      <div class="zone zp" style="margin-bottom:10px">
+        <div class="zl">Structured explorers</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
+          <button class="btn bsm" style="justify-content:center">AMC explorer</button>
+          <button class="btn bsm" style="justify-content:center">Holdings explorer</button>
+          <button class="btn bsm" style="justify-content:center">Category view</button>
+          <button class="btn bsm" style="justify-content:center">IR slope view</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="sh"><span class="st2">Data lineage</span><span class="b bgr">AUM metric</span></div>
+        <div class="lr"><span class="lk">Source</span><span class="lv">AMFI monthly AUM report</span></div>
+        <div class="lr"><span class="lk">Date range</span><span class="lv">Nov 1–30, 2024</span></div>
+        <div class="lr"><span class="lk">Last updated</span><span class="lv">Nov 20, 2024 08:12 IST</span></div>
+        <div class="lr"><span class="lk">Formula</span><span class="lv" style="font-family:monospace;font-size:10px">SUM(NAV × Units outstanding)</span></div>
+        <div class="lr"><span class="lk">Confidence</span><span class="lv"><span class="b bg">High</span></span></div>
+        <div class="lr" style="border:none"><span class="lk">Recalculated</span><span class="lv">Nov 20, 2024</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 6: RULE PLAYGROUND -->
+<div class="screen content" id="screen-playground">
+  <div class="sr"><div class="step on"><span class="sn">1</span> Edit sandbox rules</div><span class="ss">›</span><div class="step on"><span class="sn">2</span> Preview impact</div><span class="ss">›</span><div class="step"><span class="sn">3</span> Submit for review</div></div>
+  <div class="g2">
+    <div>
+      <div class="zone zw" style="margin-bottom:10px">
+        <div class="zl">Current defaults · v3.2 · read-only</div>
+        <div class="rr"><div class="rn"><div class="rnn">2Y IR Slope</div><div class="rnf">IR_slope_2Y</div></div><div class="rw">20%</div><div style="font-size:10px;color:var(--muted)">Higher ↑</div></div>
+        <div class="rr"><div class="rn"><div class="rnn">IR Consistency</div><div class="rnf">(1Y_avg_IR − 3Y_avg_IR)</div></div><div class="rw">25%</div><div style="font-size:10px;color:var(--muted)">Higher ↑</div></div>
+        <div class="rr"><div class="rn"><div class="rnn">3Y Information Ratio</div><div class="rnf">IR_3Y</div></div><div class="rw">30%</div><div style="font-size:10px;color:var(--muted)">Higher ↑</div></div>
+        <div class="rr"><div class="rn"><div class="rnn">AUM Stability</div><div class="rnf">AUM_12M_stddev</div></div><div class="rw">15%</div><div style="font-size:10px;color:var(--muted)">Lower ↓</div></div>
+        <div class="rr"><div class="rn"><div class="rnn">Expense Ratio</div><div class="rnf">expense_ratio</div></div><div class="rw">10%</div><div style="font-size:10px;color:var(--muted)">Lower ↓</div></div>
+        <div style="margin-top:6px;font-size:10px;color:var(--muted)">Total: 100% · 5 rules</div>
+      </div>
+      <div class="zone zb">
+        <div class="zl">Step 1 — sandbox rules · editable</div>
+        <div class="rr ed"><div class="rn"><div class="rnn">2Y IR Slope</div><div class="rnf">IR_slope_2Y</div></div><input type="range" min="5" max="40" value="20" step="5" id="w1" oninput="updateWeights()"><div class="rw" id="wv1">20%</div></div>
+        <div class="rr mod"><div class="rn"><div class="rnn">IR Consistency ✎</div><div class="rnf">(1Y_avg_IR − 5Y_avg_IR)</div></div><input type="range" min="5" max="40" value="30" step="5" id="w2" oninput="updateWeights()"><div class="rw" id="wv2" style="color:var(--b600)">30%</div></div>
+        <div class="rr ed"><div class="rn"><div class="rnn">3Y Information Ratio</div><div class="rnf">IR_3Y</div></div><input type="range" min="5" max="40" value="25" step="5" id="w3" oninput="updateWeights()"><div class="rw" id="wv3">25%</div></div>
+        <div class="rr ed"><div class="rn"><div class="rnn">AUM Stability</div><div class="rnf">AUM_12M_stddev</div></div><input type="range" min="5" max="40" value="15" step="5" id="w4" oninput="updateWeights()"><div class="rw" id="wv4">15%</div></div>
+        <div class="rr ed"><div class="rn"><div class="rnn">Expense Ratio</div><div class="rnf">expense_ratio</div></div><input type="range" min="5" max="40" value="10" step="5" id="w5" oninput="updateWeights()"><div class="rw" id="wv5">10%</div></div>
+        <div class="wto wtok" id="wtotal" style="margin-top:8px"><span>Total weight</span><span id="wtv" style="font-weight:700">100%</span></div>
+        <div style="margin-top:8px;display:flex;gap:6px"><button class="btn bsm">+ Add rule</button><button class="btn bsm">Reset to default</button></div>
+      </div>
+    </div>
+    <div>
+      <div class="card" style="margin-bottom:10px">
+        <div class="sh"><span class="st2">Weight allocation — live</span><span class="b bgr">Sandbox</span></div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="height:100px;width:100px;flex-shrink:0"><canvas id="donutChart"></canvas></div>
+          <div style="font-size:11px;flex:1">
+            <div style="display:flex;justify-content:space-between;padding:3px 0"><span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;background:var(--b600);border-radius:50%;display:inline-block"></span>2Y IR Slope</span><span id="dl1" style="font-weight:600">20%</span></div>
+            <div style="display:flex;justify-content:space-between;padding:3px 0"><span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;background:var(--b400);border-radius:50%;display:inline-block"></span>IR Consistency</span><span id="dl2" style="font-weight:600">30%</span></div>
+            <div style="display:flex;justify-content:space-between;padding:3px 0"><span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;background:var(--b200);border-radius:50%;display:inline-block"></span>3Y IR</span><span id="dl3" style="font-weight:600">25%</span></div>
+            <div style="display:flex;justify-content:space-between;padding:3px 0"><span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;background:var(--g200);border-radius:50%;display:inline-block"></span>AUM Stability</span><span id="dl4" style="font-weight:600">15%</span></div>
+            <div style="display:flex;justify-content:space-between;padding:3px 0"><span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;background:var(--gr100);border-radius:50%;display:inline-block"></span>Expense Ratio</span><span id="dl5" style="font-weight:600">10%</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="zone zg" style="margin-bottom:10px">
+        <div class="zl">Step 2 — impact preview · Large Cap</div>
+        <table><thead><tr><th>Fund</th><th>Default rank</th><th>Sandbox rank</th><th>Δ</th></tr></thead>
+        <tbody>
+          <tr><td style="font-weight:500">HDFC Large Cap</td><td>1</td><td style="color:var(--g600);font-weight:600">1</td><td class="df">—</td></tr>
+          <tr><td style="font-weight:500">Nippon Large Cap</td><td>5</td><td style="color:var(--g600);font-weight:600">2</td><td class="du">▲ 3</td></tr>
+          <tr><td style="font-weight:500">SBI Bluechip</td><td>2</td><td style="color:var(--a600);font-weight:600">3</td><td class="dd">▼ 1</td></tr>
+          <tr><td style="font-weight:500">Axis Bluechip</td><td>3</td><td style="color:var(--a600)">4</td><td class="dd">▼ 1</td></tr>
+        </tbody></table>
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><span class="b bg">3 promoted</span><span class="b br">2 dropped</span><span class="b ba">4 funds impacted</span></div>
+      </div>
+      <div class="zone zp">
+        <div class="zl">AI guidance</div>
+        <div class="ir" style="color:var(--p800)"><svg class="ii" width="13" height="13" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>Increasing consistency weight to 30% improves top-5 rank stability — fewer month-on-month swaps expected.</div>
+        <div class="ir"><svg class="ii" width="13" height="13" fill="none" stroke="var(--a600)" stroke-width="1.8" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>Bias warning: 1Y→5Y lookback excludes 4 funds with age &lt;5 years.</div>
+      </div>
+    </div>
+  </div>
+  <div class="ab"><button class="btn btna">Submit for review →</button><button class="btn">Reset to default</button><button class="btn bsm">Save as draft</button><div style="margin-left:auto;font-size:11px;color:var(--muted)">Sandbox · not live until approved</div></div>
+</div>
+
+<!-- SCREEN 7: RULE APPROVAL -->
+<div class="screen content" id="screen-approval">
+  <div class="g2">
+    <div>
+      <div class="zone zw" style="margin-bottom:10px">
+        <div class="zl">Version history · Large Cap</div>
+        <div class="vi sel"><div class="vd" style="background:var(--a600)"></div><div style="flex:1"><div class="vt">v3.3 — Pending review</div><div class="vm">Nov 20, 2024 · Priya Sharma · IR consistency 25→30%, formula 3Y→5Y</div></div><span class="b ba">Pending</span></div>
+        <div class="vi"><div class="vd" style="background:var(--b600)"></div><div style="flex:1"><div class="vt">v3.2 — Current default</div><div class="vm">Oct 15, 2024 · Rahul Verma · approved by Anita Singh</div></div><span class="b bg">Live</span></div>
+        <div class="vi"><div class="vd" style="background:var(--gr100)"></div><div style="flex:1"><div class="vt">v3.1</div><div class="vm">Sep 1, 2024 · 3Y IR weight 25→30%</div></div><span class="b bgr">Archived</span></div>
+        <div class="vi"><div class="vd" style="background:var(--gr100)"></div><div style="flex:1"><div class="vt">v2.0 — Foundation</div><div class="vm">Mar 10, 2024 · Initial ruleset approved</div></div><span class="b bgr">Archived</span></div>
+      </div>
+      <div class="zone za">
+        <div class="zl">Revert to earlier version</div>
+        <div style="font-size:12px;color:var(--a600);margin-bottom:8px">Reverting creates a new version with rules copied from the selected archive. All actions are logged and immutable.</div>
+        <button class="btn btnw bsm">Revert to v2.0 → creates v3.4</button>
+      </div>
+    </div>
+    <div>
+      <div class="zone zb" style="margin-bottom:10px">
+        <div class="zl">Change diff · v3.2 → v3.3</div>
+        <div class="dr"><span class="dl">IR Consistency formula</span><span class="dold">1Y_avg_IR − 3Y_avg_IR</span><span style="color:var(--muted)">→</span><span class="dnew">1Y_avg_IR − 5Y_avg_IR</span></div>
+        <div class="dr"><span class="dl">IR Consistency weight</span><span class="dold">25%</span><span style="color:var(--muted)">→</span><span class="dnew">30%</span></div>
+        <div class="dr"><span class="dl">3Y IR weight</span><span class="dold">30%</span><span style="color:var(--muted)">→</span><span class="dnew">25%</span></div>
+        <div class="dr" style="border:none"><span class="dl">Total weight check</span><span class="dnew">100% ✓</span></div>
+      </div>
+      <div class="zone zg" style="margin-bottom:10px">
+        <div class="zl">Rank impact · Large Cap</div>
+        <table><thead><tr><th>Fund</th><th>v3.2</th><th>v3.3</th><th>Δ</th><th>Score Δ</th></tr></thead>
+        <tbody>
+          <tr><td>HDFC Large Cap</td><td>1</td><td style="color:var(--g600)">1</td><td class="df">—</td><td class="df">+2</td></tr>
+          <tr><td>Nippon Large Cap</td><td>5</td><td style="color:var(--g600)">2</td><td class="du">▲ 3</td><td class="du">+12</td></tr>
+          <tr><td>SBI Bluechip</td><td>2</td><td style="color:var(--a600)">3</td><td class="dd">▼ 1</td><td class="dd">−6</td></tr>
+        </tbody></table>
+        <div style="margin-top:8px"><span class="b bg">3 promoted</span><span class="b br" style="margin-left:4px">2 dropped</span></div>
+      </div>
+      <div class="zone zp" style="margin-bottom:10px">
+        <div class="zl">AI review note</div>
+        <div class="ir" style="color:var(--p800)"><svg class="ii" width="13" height="13" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>No circular rule conflicts. Long-term IR signal is strengthened. Bias flag: funds &lt;5 years old lose IR Consistency score eligibility.</div>
+      </div>
+      <div class="card">
+        <div class="sh"><span class="st2">Approver rationale (required)</span></div>
+        <textarea rows="3" placeholder="Enter your review rationale before approving or rejecting. Stored permanently in the rule audit log."></textarea>
+        <div style="font-size:10px;color:var(--muted);margin-top:4px">Required for audit compliance. Stored with firm ID, rule version, and timestamp.</div>
+      </div>
+    </div>
+  </div>
+  <div class="ab"><button class="btn btns">Approve and publish</button><button class="btn btnw">Request changes</button><button class="btn btnd">Reject</button><div style="margin-left:auto;font-size:11px;color:var(--muted)">Submitted by Priya Sharma · Nov 20, 2024 09:31</div></div>
+</div>
+
+<!-- SCREEN 8: REPORTS BUILDER -->
+<div class="screen content" id="screen-reports">
+  <div class="sr"><div class="step on"><span class="sn">1</span> Compose</div><span class="ss">›</span><div class="step on"><span class="sn">2</span> Preview</div><span class="ss">›</span><div class="step"><span class="sn">3</span> Export</div></div>
+  <div class="g2">
+    <div>
+      <div class="zone zb" style="margin-bottom:10px">
+        <div class="zl">Step 1 — compose</div>
+        <div style="margin-bottom:8px"><div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Report title</div><div style="background:var(--surf);border:0.5px solid var(--b200);border-radius:var(--rm);padding:7px 10px;font-weight:500">Large Cap Fund Review — November 2024</div></div>
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <div style="flex:1"><div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Audience</div><div style="background:var(--surf);border:0.5px solid var(--bd2);border-radius:var(--rm);padding:7px 10px">Relationship Manager ▾</div></div>
+          <div style="flex:1"><div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Classification</div><div style="background:var(--surf);border:0.5px solid var(--bd2);border-radius:var(--rm);padding:7px 10px">Internal ▾</div></div>
+        </div>
+        <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Sections to include</div>
+        <div class="rpr"><span style="color:var(--muted)">⋮⋮</span><span style="flex:1">Fund ranking table</span><div class="tog"><div class="td"></div></div></div>
+        <div class="rpr"><span style="color:var(--muted)">⋮⋮</span><span style="flex:1">AI rank explanations</span><div class="tog"><div class="td"></div></div></div>
+        <div class="rpr"><span style="color:var(--muted)">⋮⋮</span><span style="flex:1">Performance vs benchmark</span><div class="tog"><div class="td"></div></div></div>
+        <div class="rpr"><span style="color:var(--muted)">⋮⋮</span><span style="flex:1">What changed this month</span><div class="tog"><div class="td"></div></div></div>
+        <div class="rpr" style="opacity:.45"><span style="color:var(--muted)">⋮⋮</span><span style="flex:1">Rule methodology note</span><div class="tog off"><div class="td"></div></div></div>
+        <div style="margin-top:8px;font-size:11px;color:var(--p800);background:var(--p50);border:0.5px solid var(--p200);border-radius:var(--rm);padding:8px 10px">⭐ AI can generate a compliance-safe rewrite that removes internal weights and scores for client-facing distribution.</div>
+      </div>
+      <div class="zone zw">
+        <div class="zl">Recent reports</div>
+        <div style="font-size:11px">
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:0.5px solid var(--bd)"><span style="flex:1;color:var(--b600);cursor:pointer">📄 Mid-cap review Oct 2024</span><span class="b bgr">Oct 18</span></div>
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 0"><span style="flex:1;color:var(--b600);cursor:pointer">📄 Flexi-cap comparison Sep 2024</span><span class="b bgr">Sep 22</span></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="zone zg" style="margin-bottom:10px">
+        <div class="zl">Step 2 — preview</div>
+        <div class="card">
+          <div style="font-size:15px;font-weight:700;margin-bottom:3px">Large Cap Fund Review — November 2024</div>
+          <div style="font-size:10px;color:var(--muted);margin-bottom:10px;padding-bottom:10px;border-bottom:0.5px solid var(--bd)">MFit · Rule v3.2 · Nov 20, 2024 · Internal · Relationship Manager</div>
+          <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Fund ranking — Large Cap</div>
+          <table style="font-size:11px"><thead><tr><th>#</th><th>Fund</th><th>Score</th><th>1Y IR</th><th>Δ Rank</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>HDFC Large Cap</td><td>88</td><td style="color:var(--g600)">1.42</td><td class="du">▲1</td></tr>
+            <tr><td>2</td><td>SBI Bluechip</td><td>82</td><td>1.31</td><td class="df">—</td></tr>
+            <tr><td>3</td><td>Axis Bluechip</td><td>76</td><td>1.18</td><td class="dd">▼1</td></tr>
+          </tbody></table>
+          <div style="font-size:10px;color:var(--p800);margin-top:10px;padding:8px;background:var(--p50);border-radius:var(--rm)">⭐ AI insight: HDFC Large Cap ranked #1 driven by improving 2Y IR slope and above-median consistency score under client rule v3.2.</div>
+        </div>
+      </div>
+      <div class="zone zw">
+        <div class="zl">Step 3 — export and share</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <button class="btn btnp" style="justify-content:center">Export PDF</button>
+          <button class="btn" style="justify-content:center">Export DOCX</button>
+          <button class="btn" style="justify-content:center">Email to team</button>
+          <button class="btn" style="justify-content:center">Share link</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 9: DATA QUALITY -->
+<div class="screen content" id="screen-quality">
+  <div class="sr"><div class="step on"><span class="sn">1</span> Review issues</div><span class="ss">›</span><div class="step"><span class="sn">2</span> Trace lineage</div><span class="ss">›</span><div class="step"><span class="sn">3</span> Fix and rerun</div></div>
+  <div class="g4" style="margin-bottom:12px">
+    <div class="mc"><div class="mcl">Missing NAVs</div><div class="mcv" style="color:var(--r600)">3</div><div class="mcs">affecting 3 funds</div></div>
+    <div class="mc"><div class="mcl">Stale metadata</div><div class="mcv" style="color:var(--a600)">7</div><div class="mcs">last 30 days</div></div>
+    <div class="mc"><div class="mcl">Benchmark gaps</div><div class="mcv" style="color:var(--a600)">2</div><div class="mcs">TRI mapping missing</div></div>
+    <div class="mc"><div class="mcl">Data confidence</div><div class="mcv" style="color:var(--g600)">94%</div><div class="mcs">fund universe</div></div>
+  </div>
+  <div class="g2">
+    <div>
+      <div class="zone zw" style="margin-bottom:10px">
+        <div class="zl">Step 1 — exceptions</div>
+        <div class="er"><div class="ed2" style="background:var(--r600)"></div><span class="en">UTI Small Cap</span><span class="ei">Missing NAV Nov 18–20 · IR cannot be computed</span><span class="ea">Fix →</span></div>
+        <div class="er"><div class="ed2" style="background:var(--r600)"></div><span class="en">Kotak Flexi Cap</span><span class="ei">Missing NAV Nov 19 · rank affected</span><span class="ea">Fix →</span></div>
+        <div class="er"><div class="ed2" style="background:var(--a600)"></div><span class="en">BNP Paribas Mid Cap</span><span class="ei">Benchmark TRI mapping missing</span><span class="ea">Map →</span></div>
+        <div class="er"><div class="ed2" style="background:var(--a600)"></div><span class="en">ICICI Pru Contra</span><span class="ei">Category changed Nov 2024 — verify</span><span class="ea">Verify →</span></div>
+        <div class="er"><div class="ed2" style="background:var(--a600)"></div><span class="en">Axis Flexi Cap</span><span class="ei">Scheme name changed — metadata stale</span><span class="ea">Update →</span></div>
+      </div>
+      <div class="zone za" style="margin-bottom:10px">
+        <div class="zl">Regulatory timeline</div>
+        <div style="font-size:12px;color:var(--a600);margin-bottom:6px">SEBI category reclassification effective Dec 1, 2024. 3 affected schemes detected.</div>
+        <span class="b ba" style="cursor:pointer">Review 3 affected schemes →</span>
+      </div>
+      <div class="card">
+        <div class="sh"><span class="st2">Benchmark mapping coverage</span></div>
+        <div class="pr"><span class="pl">Large Cap</span><div class="pt2"><div class="pf" style="width:100%;background:var(--g200)"></div></div><span class="pv" style="color:var(--g600)">100%</span></div>
+        <div class="pr"><span class="pl">Mid Cap</span><div class="pt2"><div class="pf" style="width:94%;background:var(--g200)"></div></div><span class="pv" style="color:var(--g600)">94%</span></div>
+        <div class="pr"><span class="pl">Small Cap</span><div class="pt2"><div class="pf" style="width:82%;background:var(--a200)"></div></div><span class="pv" style="color:var(--a600)">82%</span></div>
+        <div class="pr"><span class="pl">Flexi Cap</span><div class="pt2"><div class="pf" style="width:75%;background:var(--a200)"></div></div><span class="pv" style="color:var(--a600)">75%</span></div>
+      </div>
+    </div>
+    <div>
+      <div class="zone zp" style="margin-bottom:10px">
+        <div class="zl">Step 2 — metric lineage · 1Y IR · UTI Small Cap</div>
+        <div class="lr"><span class="lk">Source</span><span class="lv">AMFI daily NAV feed</span></div>
+        <div class="lr"><span class="lk">Formula</span><span class="lv" style="font-family:monospace;font-size:10px">(Fund return − BM return) / Tracking error</span></div>
+        <div class="lr"><span class="lk">Date range</span><span class="lv">Nov 21, 2023 – Nov 20, 2024</span></div>
+        <div class="lr"><span class="lk">Trading days</span><span class="lv">245 of 248 expected</span></div>
+        <div class="lr"><span class="lk">Benchmark</span><span class="lv">Nifty Smallcap 100 TRI</span></div>
+        <div class="lr"><span class="lk">Status</span><span class="lv"><span class="b br">Incomplete — 3 NAVs missing</span></span></div>
+        <div class="lr" style="border:none"><span class="lk">Confidence</span><span class="lv"><span class="b ba">Low — do not use for ranking</span></span></div>
+      </div>
+      <div class="zone zw">
+        <div class="zl">Step 3 — fix workflow</div>
+        <button class="btn btnp" style="width:100%;justify-content:center;margin-bottom:6px">Rerun affected rankings</button>
+        <button class="btn" style="width:100%;justify-content:center;margin-bottom:6px">Upload missing NAV data</button>
+        <button class="btn" style="width:100%;justify-content:center;margin-bottom:6px">Update benchmark mapping</button>
+        <button class="btn" style="width:100%;justify-content:center">Flag for data ops team</button>
+        <div style="margin-top:10px;font-size:11px;color:var(--muted)">Last full rerun: Nov 20, 2024 08:12 IST · Next scheduled: Nov 21, 2024</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 10: AI WORKSPACE -->
+<div class="screen content" id="screen-workspace">
+  <div class="zone zb" style="margin-bottom:12px">
+    <div class="zl">Research request</div>
+    <div style="font-size:14px;font-weight:600;color:var(--b800);margin-bottom:10px">"Show large-cap funds with improving 2Y IR slope but weak recent 1Y IR"</div>
+    <div class="zone zp" style="margin-bottom:0">
+      <div class="zl">AI interpretation</div>
+      <div style="font-size:12px;margin-bottom:8px">Filters: Category = Large Cap · 2Y IR slope = improving (positive last 3 months) · 1Y IR = below category median (1.10). This lens identifies "momentum building, near-term lag" funds — recovery candidates under current rules.</div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap"><span class="b bb">Category: Large Cap</span><span class="b bg">2Y IR slope: ↑ improving</span><span class="b ba">1Y IR: below median (1.10)</span><span class="b bgr">4 funds matched</span></div>
+    </div>
+  </div>
+  <div class="g2">
+    <div>
+      <div class="card" style="margin-bottom:10px">
+        <div class="sh"><span class="st2">IR slope vs 1Y IR — Large Cap universe</span><span class="sa">Ask this chart</span></div>
+        <div style="height:160px;position:relative"><canvas id="scatterChart"></canvas></div>
+        <div style="display:flex;gap:12px;margin-top:6px;font-size:10px;color:var(--muted)">
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;background:var(--b600);border-radius:50%;display:inline-block"></span>Matched funds (4)</span>
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;background:var(--gr100);border-radius:50%;display:inline-block"></span>Other funds</span>
+          <span style="margin-left:auto">x = 1Y IR · y = IR slope</span>
+        </div>
+      </div>
+      <div class="zone zg">
+        <div class="zl">Ranked results · 4 funds matched</div>
+        <table><thead><tr><th style="width:30px"><input type="checkbox"></th><th>#</th><th>Fund</th><th>IR slope</th><th>1Y IR</th><th>Score</th></tr></thead>
+        <tbody>
+          <tr><td><input type="checkbox"></td><td><div class="rk top">1</div></td><td style="font-weight:500">Nippon Large Cap</td><td style="color:var(--g600);font-weight:500">↑↑ Strong</td><td style="color:var(--a600)">0.92</td><td>74</td></tr>
+          <tr><td><input type="checkbox"></td><td><div class="rk">2</div></td><td style="font-weight:500">Canara Robeco LC</td><td style="color:var(--g600)">↑ Improving</td><td style="color:var(--a600)">0.88</td><td>71</td></tr>
+          <tr><td><input type="checkbox"></td><td><div class="rk">3</div></td><td style="font-weight:500">PGIM Large Cap</td><td style="color:var(--g600)">↑ Improving</td><td style="color:var(--a600)">0.84</td><td>68</td></tr>
+          <tr><td><input type="checkbox"></td><td><div class="rk">4</div></td><td style="font-weight:500">Tata Large Cap</td><td style="color:var(--g600)">↑ Flat→up</td><td style="color:var(--a600)">0.81</td><td>65</td></tr>
+        </tbody></table>
+      </div>
+    </div>
+    <div>
+      <div class="zone zp" style="margin-bottom:10px">
+        <div class="zl">Key insights</div>
+        <div class="ir" style="color:var(--p800)"><svg class="ii" width="13" height="13" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>Nippon shows strongest slope acceleration — IR improved 0.72 → 0.92 over 3 months. Watch for sustained momentum.</div>
+        <div class="ir"><svg class="ii" width="13" height="13" fill="none" stroke="var(--b400)" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>All 4 are below category median 1Y IR (1.10). May reflect recent market rotation — not necessarily manager deterioration.</div>
+        <div class="ir"><svg class="ii" width="13" height="13" fill="none" stroke="var(--a600)" stroke-width="1.8" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>Monitor: if 1Y IR stays below median for 2+ months, review rule classification for this group.</div>
+      </div>
+      <div class="zone zw" style="margin-bottom:10px">
+        <div class="zl">Next best questions</div>
+        <span class="chip" style="display:block;margin-bottom:5px">Show Nippon IR slope trend — 6 months</span>
+        <span class="chip" style="display:block;margin-bottom:5px">Compare these 4 funds head-to-head</span>
+        <span class="chip" style="display:block;margin-bottom:5px">What drove Nippon's IR improvement?</span>
+        <span class="chip" style="display:block">Build a rule to capture this pattern</span>
+      </div>
+      <div class="zone zw">
+        <div class="zl">Actions</div>
+        <button class="btn btnp" style="width:100%;justify-content:center;margin-bottom:6px">Compare these funds (4)</button>
+        <button class="btn" style="width:100%;justify-content:center;margin-bottom:6px">Generate insight report</button>
+        <button class="btn" style="width:100%;justify-content:center;margin-bottom:6px">Build rule from this lens</button>
+        <button class="btn" style="width:100%;justify-content:center">Save workspace</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- SCREEN: ⌘K COMMAND PALETTE -->
+<div class="screen content" id="screen-cmdpal">
+  <div style="max-width:580px;margin:0 auto">
+    <div style="background:var(--surf);border:0.5px solid var(--bd2);border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.08)">
+      <!-- Input -->
+      <div style="display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:0.5px solid var(--bd2)">
+        <svg width="16" height="16" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        <span style="font-size:14px;flex:1;color:var(--text)">Show large cap funds by IR slope</span>
+        <kbd style="font-size:10px;color:var(--muted);background:var(--gr50);border:0.5px solid var(--bd2);border-radius:4px;padding:2px 6px">Esc</kbd>
+      </div>
+      <!-- AI suggestion row -->
+      <div style="padding:8px 12px;background:var(--p50);border-bottom:0.5px solid var(--p200);display:flex;gap:10px;align-items:flex-start">
+        <svg style="flex-shrink:0;margin-top:2px" width="13" height="13" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        <div>
+          <div style="font-size:11px;font-weight:600;color:var(--p800);margin-bottom:2px">AI suggestion</div>
+          <div style="font-size:12px;color:var(--p800)">Run AI Workspace with lens: "improving IR slope, large cap" and show scatter plot + ranked results</div>
+          <div style="margin-top:5px"><span class="b bp" style="cursor:pointer">Run this →</span></div>
+        </div>
+      </div>
+      <!-- Result sections -->
+      <div style="max-height:360px;overflow-y:auto">
+        <!-- Navigate section -->
+        <div style="padding:8px 12px 4px;font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Navigate</div>
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 14px;cursor:pointer" onmouseover="this.style.background='var(--gr50)'" onmouseout="this.style.background=''">
+          <svg width="14" height="14" fill="none" stroke="var(--b600)" stroke-width="1.8" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          <span style="flex:1;font-size:12px">Large Cap Rankings</span><span class="b bgr">Rankings</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 14px;cursor:pointer;background:var(--b50)" onmouseover="this.style.background='var(--b50)'" onmouseout="this.style.background=''">
+          <svg width="14" height="14" fill="none" stroke="var(--b600)" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          <span style="flex:1;font-size:12px;font-weight:500;color:var(--b600)">AI Workspace — IR slope lens</span><kbd style="font-size:10px;background:var(--surf);border:0.5px solid var(--bd2);border-radius:3px;padding:1px 5px;color:var(--muted)">↵</kbd>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 14px;cursor:pointer" onmouseover="this.style.background='var(--gr50)'" onmouseout="this.style.background=''">
+          <svg width="14" height="14" fill="none" stroke="var(--b600)" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          <span style="flex:1;font-size:12px">HDFC Large Cap — Fund Detail</span><span class="b bgr">Fund</span>
+        </div>
+        <!-- Actions section -->
+        <div style="padding:8px 12px 4px;font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;border-top:0.5px solid var(--bd)">Actions</div>
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 14px;cursor:pointer" onmouseover="this.style.background='var(--gr50)'" onmouseout="this.style.background=''">
+          <svg width="14" height="14" fill="none" stroke="var(--g600)" stroke-width="1.8" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/></svg>
+          <span style="flex:1;font-size:12px">Generate report — Large Cap Nov 2024</span><span class="b bg">Report</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 14px;cursor:pointer" onmouseover="this.style.background='var(--gr50)'" onmouseout="this.style.background=''">
+          <svg width="14" height="14" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+          <span style="flex:1;font-size:12px">Open Rule Playground — sandbox v3.2</span><span class="b bp">Playground</span>
+        </div>
+        <!-- Recent section -->
+        <div style="padding:8px 12px 4px;font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;border-top:0.5px solid var(--bd)">Recent queries</div>
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 14px;cursor:pointer" onmouseover="this.style.background='var(--gr50)'" onmouseout="this.style.background=''">
+          <svg width="14" height="14" fill="none" stroke="var(--muted)" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span style="flex:1;font-size:12px;color:var(--muted)">Top mid-cap funds by IR slope — Nov 18</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 14px;cursor:pointer" onmouseover="this.style.background='var(--gr50)'" onmouseout="this.style.background=''">
+          <svg width="14" height="14" fill="none" stroke="var(--muted)" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span style="flex:1;font-size:12px;color:var(--muted)">Compare HDFC vs SBI large cap — Nov 15</span>
+        </div>
+      </div>
+      <!-- Footer -->
+      <div style="padding:8px 14px;border-top:0.5px solid var(--bd);background:var(--gr50);display:flex;gap:12px;font-size:10px;color:var(--muted)">
+        <span><kbd style="background:var(--surf);border:0.5px solid var(--bd2);border-radius:3px;padding:1px 5px">↑↓</kbd> navigate</span>
+        <span><kbd style="background:var(--surf);border:0.5px solid var(--bd2);border-radius:3px;padding:1px 5px">↵</kbd> select</span>
+        <span><kbd style="background:var(--surf);border:0.5px solid var(--bd2);border-radius:3px;padding:1px 5px">Esc</kbd> close</span>
+        <span style="margin-left:auto">⌘K anywhere to open</span>
+      </div>
+    </div>
+    <div style="margin-top:16px;font-size:11px;color:var(--muted);text-align:center">The ⌘K command palette is accessible from any screen. It combines navigation, actions, and AI queries in one place.</div>
+  </div>
+</div>
+
+<!-- SCREEN: FORMULA EDITOR -->
+<div class="screen content" id="screen-formula">
+  <div class="sr"><div class="step on"><span class="sn">1</span> Define formula</div><span class="ss">›</span><div class="step on"><span class="sn">2</span> Validate</div><span class="ss">›</span><div class="step"><span class="sn">3</span> Save to rule</div></div>
+  <div class="g2">
+    <div>
+      <div class="zone zb" style="margin-bottom:10px">
+        <div class="zl">Step 1 — formula editor</div>
+        <div style="margin-bottom:8px">
+          <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Rule name</div>
+          <div style="background:var(--surf);border:0.5px solid var(--b200);border-radius:var(--rm);padding:7px 10px;font-weight:500">IR Consistency Score</div>
+        </div>
+        <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Formula</div>
+        <div style="background:var(--b800);border-radius:var(--rm);padding:12px 14px;font-family:monospace;font-size:13px;color:#E6F1FB;min-height:80px;position:relative">
+          <div style="color:#85B7EB">/* IR Consistency: long-run vs short-run IR gap */</div>
+          <div style="margin-top:6px"><span style="color:#97C459">ROLLING_IR</span>(<span style="color:#FAEEDA">fund_id</span>, <span style="color:#EF9F27">1Y</span>)<span style="color:white"> − </span><span style="color:#97C459">ROLLING_IR</span>(<span style="color:#FAEEDA">fund_id</span>, <span style="color:#EF9F27">5Y</span>)</div>
+          <div style="position:absolute;bottom:8px;right:10px;font-size:10px;color:#85B7EB">Line 2, Col 56</div>
+        </div>
+        <div style="margin-top:6px;font-size:11px;color:var(--muted)">Available variables:</div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">
+          <span class="b bb" style="cursor:pointer;font-family:monospace">fund_id</span>
+          <span class="b bb" style="cursor:pointer;font-family:monospace">ROLLING_IR(id, period)</span>
+          <span class="b bb" style="cursor:pointer;font-family:monospace">AUM_12M_stddev</span>
+          <span class="b bb" style="cursor:pointer;font-family:monospace">IR_slope_2Y</span>
+          <span class="b bb" style="cursor:pointer;font-family:monospace">expense_ratio</span>
+          <span class="b bb" style="cursor:pointer;font-family:monospace">tracking_error</span>
+        </div>
+        <div style="margin-top:8px;font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Direction</div>
+        <div style="display:flex;gap:6px">
+          <div style="background:var(--b600);color:white;border-radius:var(--rm);padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer">Higher is better ↑</div>
+          <div style="border:0.5px solid var(--bd2);border-radius:var(--rm);padding:5px 10px;font-size:11px;cursor:pointer;color:var(--muted)">Lower is better ↓</div>
+        </div>
+      </div>
+      <div class="zone zg">
+        <div class="zl">Step 2 — validation result</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <svg width="16" height="16" fill="none" stroke="var(--g600)" stroke-width="2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+          <span style="font-size:12px;font-weight:600;color:var(--g800)">Formula is valid — no errors detected</span>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Tested against 186 funds in fund universe. Results:</div>
+        <div class="lr"><span class="lk">Output range</span><span class="lv">−0.34 to +0.82</span></div>
+        <div class="lr"><span class="lk">Funds eligible</span><span class="lv">182 / 186 (4 excluded — age &lt;5Y)</span></div>
+        <div class="lr"><span class="lk">Null values</span><span class="lv"><span class="b bg">None</span></span></div>
+        <div class="lr" style="border:none"><span class="lk">Compute time</span><span class="lv">0.4 seconds (avg)</span></div>
+        <div style="margin-top:8px;background:var(--p50);border:0.5px solid var(--p200);border-radius:var(--rm);padding:8px 10px;font-size:11px;color:var(--p800)">⭐ AI note: 4 funds with &lt;5Y history will receive a score of 0 for this metric — consistent with the exclusion policy in rule v3.2.</div>
+      </div>
+    </div>
+    <div>
+      <div class="card" style="margin-bottom:10px">
+        <div class="sh"><span class="st2">Formula preview — sample output</span></div>
+        <table><thead><tr><th>Fund</th><th>1Y IR</th><th>5Y IR</th><th>Score (formula)</th></tr></thead>
+        <tbody>
+          <tr><td style="font-weight:500">HDFC Large Cap</td><td>1.42</td><td>1.18</td><td style="color:var(--g600);font-weight:600">+0.24</td></tr>
+          <tr><td style="font-weight:500">SBI Bluechip</td><td>1.31</td><td>1.22</td><td style="color:var(--g600)">+0.09</td></tr>
+          <tr><td style="font-weight:500">Axis Bluechip</td><td>1.18</td><td>1.24</td><td style="color:var(--r600)">−0.06</td></tr>
+          <tr><td style="font-weight:500">Nippon Large Cap</td><td>0.92</td><td>1.10</td><td style="color:var(--r600)">−0.18</td></tr>
+        </tbody></table>
+        <div style="margin-top:8px;font-size:10px;color:var(--muted)">Positive = improving vs long-run IR · Negative = declining vs history</div>
+      </div>
+      <div class="zone zp" style="margin-bottom:10px">
+        <div class="zl">AI guidance</div>
+        <div class="ir" style="color:var(--p800)"><svg class="ii" width="13" height="13" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>Changing from 3Y to 5Y lookback strengthens long-run signal but excludes funds younger than 5 years. 4 funds affected in large cap universe.</div>
+        <div class="ir"><svg class="ii" width="13" height="13" fill="none" stroke="var(--a600)" stroke-width="1.8" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>Alternative: use MIN(fund_age, 5Y) as period to keep younger funds eligible with adjusted lookback.</div>
+      </div>
+      <div class="zone zw">
+        <div class="zl">Step 3 — save to rule</div>
+        <div style="margin-bottom:8px;font-size:11px;color:var(--muted)">This formula will be saved into the sandbox as a modified rule. It requires product team approval before going live.</div>
+        <button class="btn btnp" style="width:100%;justify-content:center;margin-bottom:6px">Save to sandbox rule</button>
+        <button class="btn" style="width:100%;justify-content:center;margin-bottom:6px">Save as new rule</button>
+        <button class="btn" style="width:100%;justify-content:center">Discard changes</button>
+      </div>
+    </div>
+  </div>
+  <div class="ab"><button class="btn btnp">Save to sandbox →</button><button class="btn">Test on full universe</button><button class="btn">Copy formula</button><div style="margin-left:auto;font-size:11px;color:var(--muted)">Sandbox only · requires approval to go live</div></div>
+</div>
+
+<!-- SCREEN: ADMIN / DATA OPS -->
+<div class="screen content" id="screen-admin">
+  <div class="g4" style="margin-bottom:12px">
+    <div class="mc"><div class="mcl">Fund universe</div><div class="mcv">2,847</div><div class="mcs">active schemes</div></div>
+    <div class="mc"><div class="mcl">NAV coverage</div><div class="mcv" style="color:var(--g600)">98.8%</div><div class="mcs">as of today</div></div>
+    <div class="mc"><div class="mcl">Pending mergers</div><div class="mcv" style="color:var(--a600)">3</div><div class="mcs">scheme mergers detected</div></div>
+    <div class="mc"><div class="mcl">Benchmark gaps</div><div class="mcv" style="color:var(--r600)">7</div><div class="mcs">TRI mapping missing</div></div>
+  </div>
+  <div class="g2">
+    <div>
+      <div class="zone zb" style="margin-bottom:10px">
+        <div class="zl">NAV upload</div>
+        <div style="border:1.5px dashed var(--b200);border-radius:var(--rm);padding:24px;text-align:center;background:var(--surf);cursor:pointer;margin-bottom:8px" onmouseover="this.style.background='var(--b50)'" onmouseout="this.style.background='var(--surf)'">
+          <svg width="24" height="24" fill="none" stroke="var(--b400)" stroke-width="1.5" viewBox="0 0 24 24" style="margin-bottom:6px"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/></svg>
+          <div style="font-size:12px;font-weight:500;color:var(--b800)">Drop NAV file here or click to browse</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:3px">Accepts: .csv · .xlsx · AMFI daily format</div>
+        </div>
+        <div style="display:flex;gap:6px"><button class="btn btnp bsm">Process latest AMFI file</button><button class="btn bsm">Schedule auto-import</button></div>
+      </div>
+      <div class="zone zw" style="margin-bottom:10px">
+        <div class="zl">Benchmark mapping editor</div>
+        <table><thead><tr><th>Category</th><th>Benchmark (TRI)</th><th>Coverage</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>Large Cap</td><td>Nifty 50 TRI</td><td><span class="b bg">100%</span></td><td style="color:var(--b600);cursor:pointer;font-size:11px">Edit</td></tr>
+          <tr><td>Mid Cap</td><td>Nifty Midcap 150 TRI</td><td><span class="b bg">94%</span></td><td style="color:var(--b600);cursor:pointer;font-size:11px">Edit</td></tr>
+          <tr><td>Small Cap</td><td>Nifty Smallcap 100 TRI</td><td><span class="b ba">82%</span></td><td style="color:var(--b600);cursor:pointer;font-size:11px">Edit</td></tr>
+          <tr><td>Contra / Value</td><td style="color:var(--r600)">Not mapped</td><td><span class="b br">0%</span></td><td style="color:var(--b600);cursor:pointer;font-size:11px">Map now</td></tr>
+        </tbody></table>
+        <div style="margin-top:8px"><button class="btn bsm">Bulk map missing benchmarks</button></div>
+      </div>
+      <div class="zone za">
+        <div class="zl">Pending scheme mergers · 3 detected</div>
+        <div class="er"><div class="ed2" style="background:var(--a600)"></div><span class="en">IDFC → Bandhan MF</span><span class="ei">All IDFC schemes migrated to Bandhan — 47 schemes affected</span><span class="ea">Confirm →</span></div>
+        <div class="er"><div class="ed2" style="background:var(--a600)"></div><span class="en">Edelweiss merger</span><span class="ei">3 schemes absorbed into existing categories</span><span class="ea">Review →</span></div>
+        <div class="er"><div class="ed2" style="background:var(--a600)"></div><span class="en">HSBC AMC rename</span><span class="ei">Scheme name change — historical series continuity check required</span><span class="ea">Check →</span></div>
+      </div>
+    </div>
+    <div>
+      <div class="zone zp" style="margin-bottom:10px">
+        <div class="zl">AI data operations assistant</div>
+        <div class="ir" style="color:var(--p800)"><svg class="ii" width="13" height="13" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>AMFI feed for Nov 20 was processed at 08:12 IST. 2,847 funds updated. 3 NAVs missing — UTI Small Cap, Kotak Flexi Cap, and BNP Mid Cap flagged automatically.</div>
+        <div class="ir"><svg class="ii" width="13" height="13" fill="none" stroke="var(--a600)" stroke-width="1.8" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>SEBI reclassification effective Dec 1 — 12 schemes will change categories. Run category migration preview to see ranking impact.</div>
+        <span class="chip">Run migration preview</span>
+        <span class="chip">View missing NAV log</span>
+      </div>
+      <div class="card" style="margin-bottom:10px">
+        <div class="sh"><span class="st2">Recent data operations log</span><span class="sa">Full log</span></div>
+        <div style="font-size:11px">
+          <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--bd)"><span style="color:var(--g600)">✓ AMFI NAV import</span><span style="color:var(--muted)">Nov 20 08:12</span></div>
+          <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--bd)"><span style="color:var(--g600)">✓ Rankings rerun — Large Cap</span><span style="color:var(--muted)">Nov 20 08:18</span></div>
+          <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--bd)"><span style="color:var(--a600)">⚠ 3 missing NAVs flagged</span><span style="color:var(--muted)">Nov 20 08:18</span></div>
+          <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid var(--bd)"><span style="color:var(--g600)">✓ Benchmark TRI mapping updated</span><span style="color:var(--muted)">Nov 19 17:30</span></div>
+          <div style="display:flex;justify-content:space-between;padding:5px 0"><span style="color:var(--r600)">✗ Contra benchmark mapping failed</span><span style="color:var(--muted)">Nov 19 17:30</span></div>
+        </div>
+      </div>
+      <div class="zone zw">
+        <div class="zl">Admin actions</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <button class="btn bsm" style="justify-content:center">Rerun all rankings</button>
+          <button class="btn bsm" style="justify-content:center">Export fund universe</button>
+          <button class="btn bsm" style="justify-content:center">Category migration</button>
+          <button class="btn bsm" style="justify-content:center">Audit log export</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN: EMPTY & ERROR STATES -->
+<div class="screen content" id="screen-empty">
+  <div style="margin-bottom:12px;font-size:12px;color:var(--muted)">Component library — empty and error states used across all screens. Each state includes guidance on what to do next.</div>
+  <div class="g2">
+    <div>
+      <!-- Empty: no filter results -->
+      <div class="card" style="margin-bottom:10px">
+        <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Empty state — no filter results</div>
+        <div style="text-align:center;padding:24px 0">
+          <svg width="40" height="40" fill="none" stroke="var(--gr200)" stroke-width="1.2" viewBox="0 0 24 24" style="margin-bottom:10px"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <div style="font-size:14px;font-weight:500;color:var(--text);margin-bottom:4px">No funds matched your filters</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:12px;max-width:280px;margin-left:auto;margin-right:auto">Try broadening your category selection, adjusting the date range, or resetting the rule version.</div>
+          <div style="display:flex;gap:6px;justify-content:center"><button class="btn btnp bsm">Reset filters</button><button class="btn bsm">Ask MFit for help</button></div>
+        </div>
+      </div>
+      <!-- Empty: no rules configured -->
+      <div class="card" style="margin-bottom:10px">
+        <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Empty state — no rules configured</div>
+        <div style="text-align:center;padding:24px 0">
+          <svg width="40" height="40" fill="none" stroke="var(--gr200)" stroke-width="1.2" viewBox="0 0 24 24" style="margin-bottom:10px"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/></svg>
+          <div style="font-size:14px;font-weight:500;color:var(--text);margin-bottom:4px">No rules configured yet</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:12px">This category has no active rule set. Create a rule in the playground to start ranking funds.</div>
+          <div style="display:flex;gap:6px;justify-content:center"><button class="btn btnp bsm">Create first rule</button><button class="btn bsm">Import template</button></div>
+        </div>
+      </div>
+      <!-- Loading state -->
+      <div class="card">
+        <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Loading — rule engine recalculating</div>
+        <div style="display:flex;align-items:center;gap:10px;padding:10px;background:var(--b50);border:0.5px solid var(--b200);border-radius:var(--rm);margin-bottom:8px">
+          <svg width="16" height="16" fill="none" stroke="var(--p600)" stroke-width="1.8" viewBox="0 0 24 24" style="animation:spin 1.5s linear infinite"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          <div style="flex:1"><div style="font-size:12px;font-weight:500;color:var(--b800)">Recalculating rankings...</div><div style="font-size:10px;color:var(--muted)">Running rule v3.2 against 186 large-cap funds. Usually takes 4–8 seconds.</div></div>
+        </div>
+        <!-- Skeleton rows -->
+        <div style="height:12px;background:var(--gr50);border-radius:3px;margin-bottom:6px;animation:pulse 1.5s ease-in-out infinite"></div>
+        <div style="height:12px;background:var(--gr50);border-radius:3px;margin-bottom:6px;width:85%;animation:pulse 1.5s ease-in-out infinite;animation-delay:.1s"></div>
+        <div style="height:12px;background:var(--gr50);border-radius:3px;margin-bottom:6px;width:90%;animation:pulse 1.5s ease-in-out infinite;animation-delay:.2s"></div>
+        <div style="height:12px;background:var(--gr50);border-radius:3px;width:75%;animation:pulse 1.5s ease-in-out infinite;animation-delay:.3s"></div>
+      </div>
+    </div>
+    <div>
+      <!-- Error: API failure -->
+      <div class="card" style="margin-bottom:10px">
+        <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Error state — API failure</div>
+        <div style="text-align:center;padding:24px 0">
+          <svg width="40" height="40" fill="none" stroke="var(--r200)" stroke-width="1.2" viewBox="0 0 24 24" style="margin-bottom:10px"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+          <div style="font-size:14px;font-weight:500;color:var(--r600);margin-bottom:4px">Rankings could not be loaded</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Error: Rule engine returned timeout after 30s</div>
+          <div style="font-size:10px;color:var(--muted);margin-bottom:12px;font-family:monospace">REQ-20241120-0892 · 08:14:33 IST</div>
+          <div style="display:flex;gap:6px;justify-content:center"><button class="btn btnp bsm">Retry</button><button class="btn btnd bsm">Report issue</button></div>
+        </div>
+      </div>
+      <!-- Error: data confidence warning -->
+      <div class="card" style="margin-bottom:10px">
+        <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Warning state — data confidence low</div>
+        <div style="background:var(--a50);border:0.5px solid var(--a200);border-radius:var(--rm);padding:12px 14px">
+          <div style="display:flex;gap:8px;align-items:flex-start">
+            <svg width="16" height="16" fill="none" stroke="var(--a600)" stroke-width="1.8" viewBox="0 0 24 24" style="flex-shrink:0;margin-top:2px"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <div>
+              <div style="font-size:12px;font-weight:600;color:var(--a600);margin-bottom:4px">Rankings shown with reduced confidence</div>
+              <div style="font-size:11px;color:var(--a600)">3 of 12 funds have missing NAVs. Rankings are approximate. Missing: UTI Small Cap, Kotak Flexi Cap, BNP Mid Cap.</div>
+              <div style="margin-top:8px;display:flex;gap:5px"><button class="btn btnw bsm">Fix data issues</button><button class="btn bsm">Show anyway</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Empty: no chat history -->
+      <div class="card">
+        <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Empty state — first session / research chat</div>
+        <div style="text-align:center;padding:24px 0">
+          <svg width="40" height="40" fill="none" stroke="var(--p200)" stroke-width="1.2" viewBox="0 0 24 24" style="margin-bottom:10px"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          <div style="font-size:14px;font-weight:500;color:var(--text);margin-bottom:4px">Ask MFit anything about the fund universe</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Try: "Show HDFC large cap vs SBI bluechip" or "Which funds improved rank this month?"</div>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:center"><span class="chip">Top large cap by rule score</span><span class="chip">Funds with improving IR slope</span><span class="chip">SBI schemes below ₹1000 Cr</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN: ROLE-AWARE NAVIGATION -->
+<div class="screen content" id="screen-roles">
+  <div style="margin-bottom:12px;font-size:12px;color:var(--muted)">Role-aware navigation — each role sees a filtered sidebar and permission-appropriate screens. Switch roles to preview.</div>
+  <div class="g3">
+    <!-- RM view -->
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:0.5px solid var(--bd2)">
+        <div style="width:28px;height:28px;border-radius:50%;background:var(--b50);color:var(--b800);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600">RM</div>
+        <div><div style="font-weight:600;font-size:12px">Relationship Manager</div><div style="font-size:10px;color:var(--muted)">View only · no rule edit · no approval</div></div>
+      </div>
+      <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Visible nav items</div>
+      <div style="font-size:11px">
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ AI Home</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Category Rankings</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Fund Detail</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Fund Comparison</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Research Chat</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Reports Builder</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--muted)">— Rule Playground (hidden)</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--muted)">— Rule Approval (hidden)</div>
+        <div style="padding:5px 0;color:var(--muted)">— Data Quality (hidden)</div>
+      </div>
+      <div style="margin-top:8px"><span class="b bb">View-only</span><span class="b bgr" style="margin-left:4px">No rule access</span></div>
+    </div>
+    <!-- Product team view -->
+    <div class="card" style="border:1.5px solid var(--b600)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:0.5px solid var(--bd2)">
+        <div style="width:28px;height:28px;border-radius:50%;background:var(--b50);color:var(--b800);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600">PT</div>
+        <div><div style="font-weight:600;font-size:12px">Product / Investment Team</div><div style="font-size:10px;color:var(--muted)">Rule create · submit · no approve</div></div>
+        <span class="b bb" style="margin-left:auto">Current role</span>
+      </div>
+      <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Visible nav items</div>
+      <div style="font-size:11px">
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ AI Home</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Category Rankings</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Fund Detail</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Fund Comparison</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Research Chat</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Rule Playground (edit)</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ AI Workspace</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Reports Builder</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--muted)">— Rule Approval (view-only)</div>
+        <div style="padding:5px 0;color:var(--muted)">— Data Quality (hidden)</div>
+      </div>
+      <div style="margin-top:8px"><span class="b bg">Rule create</span><span class="b bgr" style="margin-left:4px">Cannot approve own rules</span></div>
+    </div>
+    <!-- Admin view -->
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:0.5px solid var(--bd2)">
+        <div style="width:28px;height:28px;border-radius:50%;background:var(--r50);color:var(--r600);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600">AO</div>
+        <div><div style="font-weight:600;font-size:12px">Admin / Data Ops</div><div style="font-size:10px;color:var(--muted)">Full data access · no client reports</div></div>
+      </div>
+      <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Visible nav items</div>
+      <div style="font-size:11px">
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Data Quality</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Admin / Data Ops</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Rule Approval</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Category Rankings</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--b600)">✓ Fund Detail</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--muted)">— Reports Builder (hidden)</div>
+        <div style="padding:5px 0;border-bottom:0.5px solid var(--bd);color:var(--muted)">— Research Chat (hidden)</div>
+        <div style="padding:5px 0;color:var(--muted)">— Rule Playground (view-only)</div>
+      </div>
+      <div style="margin-top:8px"><span class="b br">Full data access</span><span class="b bg" style="margin-left:4px">Approve rules</span></div>
+    </div>
+  </div>
+  <div style="margin-top:12px" class="zone zp">
+    <div class="zl">Role indicator — topbar treatment</div>
+    <div style="background:var(--surf);border:0.5px solid var(--bd2);border-radius:var(--rl);padding:8px 14px;display:flex;align-items:center;gap:10px;max-width:500px">
+      <span style="font-size:12px;font-weight:500;flex:1">Priya Sharma</span>
+      <span class="b bb">Relationship Manager</span>
+      <span style="font-size:11px;color:var(--b600);cursor:pointer">Switch →</span>
+    </div>
+    <div style="margin-top:8px;font-size:11px;color:var(--p800)">⭐ Role indicator is always visible in the topbar. Clicking "Switch" allows admins to impersonate roles for testing. Role is stored in the session and persists across screens.</div>
+  </div>
+</div>
+
+<!-- SCREEN: NOTIFICATIONS PANEL -->
+<div class="screen content" id="screen-notif">
+  <div style="max-width:520px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="font-size:16px;font-weight:600">Notifications</div>
+      <div style="display:flex;gap:6px"><span class="b ba">2 pending</span><span class="b bgr" style="cursor:pointer">Mark all read</span></div>
+    </div>
+
+    <!-- Pending approval -->
+    <div class="card" style="margin-bottom:8px;border-left:3px solid var(--a600);border-radius:0 var(--rl) var(--rl) 0">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <div style="width:32px;height:32px;border-radius:50%;background:var(--a50);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <svg width="15" height="15" fill="none" stroke="var(--a600)" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:12px;margin-bottom:2px">Rule v3.3 submitted for review</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Priya Sharma submitted a rule change for Large Cap. IR consistency weight 25%→30%, formula updated to 5Y lookback. Requires product team approval.</div>
+          <div style="display:flex;gap:5px"><button class="btn btns bsm">Approve</button><button class="btn bsm">Review</button><button class="btn btnd bsm">Reject</button></div>
+        </div>
+        <div style="font-size:10px;color:var(--muted);flex-shrink:0">2h ago</div>
+      </div>
+    </div>
+
+    <!-- Data quality alert -->
+    <div class="card" style="margin-bottom:8px;border-left:3px solid var(--r600);border-radius:0 var(--rl) var(--rl) 0">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <div style="width:32px;height:32px;border-radius:50%;background:var(--r50);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <svg width="15" height="15" fill="none" stroke="var(--r600)" stroke-width="1.8" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </div>
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:12px;margin-bottom:2px">3 missing NAVs — rankings affected</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px">UTI Small Cap, Kotak Flexi Cap, and BNP Mid Cap are missing NAVs for Nov 18–20. Large Cap and Mid Cap rankings are using last known values.</div>
+          <div style="display:flex;gap:5px"><button class="btn btnp bsm">Fix data issues</button><button class="btn bsm">Dismiss</button></div>
+        </div>
+        <div style="font-size:10px;color:var(--muted);flex-shrink:0">4h ago</div>
+      </div>
+    </div>
+
+    <!-- Rankings rerun complete -->
+    <div class="card" style="margin-bottom:8px;opacity:0.7">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <div style="width:32px;height:32px;border-radius:50%;background:var(--g50);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <svg width="15" height="15" fill="none" stroke="var(--g600)" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:12px;margin-bottom:2px">Large Cap rankings rerun complete</div>
+          <div style="font-size:11px;color:var(--muted)">Rule v3.2 applied to 186 funds. HDFC Large Cap maintains rank #1. Kotak Bluechip dropped 4 places. <span style="color:var(--b600);cursor:pointer">View rankings →</span></div>
+        </div>
+        <div style="font-size:10px;color:var(--muted);flex-shrink:0">8h ago</div>
+      </div>
+    </div>
+
+    <!-- Rule approved -->
+    <div class="card" style="opacity:0.6">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <div style="width:32px;height:32px;border-radius:50%;background:var(--g50);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <svg width="15" height="15" fill="none" stroke="var(--g600)" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:12px;margin-bottom:2px">Rule v3.2 approved and published</div>
+          <div style="font-size:11px;color:var(--muted)">Approved by Anita Singh on Oct 15, 2024. Now live as the default rule for all categories.</div>
+        </div>
+        <div style="font-size:10px;color:var(--muted);flex-shrink:0">Oct 15</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+</div>
+</div>
+
+<style>
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+</style>
+
+<script>
+const SCREENS=['home','rankings','fund','compare','chat','playground','approval','reports','quality','workspace','cmdpal','formula','admin','empty','roles','notif'];
+let charts={};
+function show(id,bc,title){
+  SCREENS.forEach(s=>{
+    const el=document.getElementById('screen-'+s);
+    if(el)el.classList.remove('active');
+    document.querySelectorAll('[data-s='+s+']').forEach(b=>b.classList.remove('active'));
+  });
+  const target=document.getElementById('screen-'+id);
+  if(target)target.classList.add('active');
+  document.querySelectorAll('[data-s='+id+']').forEach(b=>b.classList.add('active'));
+  document.getElementById('bc').textContent=bc;
+  document.getElementById('pt').textContent=title;
+  setTimeout(()=>initFor(id),80);
+}
+function destroy(id){if(charts[id]){charts[id].destroy();delete charts[id];}}
+const MO=['Dec','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov'];
+const IRS=[1.08,1.15,1.22,0.98,1.10,1.30,1.25,1.35,1.28,0.95,1.10,1.42];
+const SBI=[1.05,1.10,1.08,0.95,1.15,1.22,1.18,1.28,1.20,1.05,1.28,1.31];
+const BM=new Array(12).fill(0);
+function initFor(id){
+  if(id==='fund')initIR();
+  if(id==='compare')initCmp();
+  if(id==='playground')initDonut();
+  if(id==='workspace')initScatter();
+}
+function initIR(){
+  destroy('irChart');const ctx=document.getElementById('irChart');if(!ctx)return;
+  charts['irChart']=new Chart(ctx,{type:'line',data:{labels:MO,datasets:[
+    {label:'Fund IR',data:IRS,borderColor:'#185FA5',backgroundColor:'rgba(24,95,165,0.06)',borderWidth:2,pointRadius:3,pointBackgroundColor:'#185FA5',tension:0.4,fill:true},
+    {label:'Baseline',data:BM,borderColor:'#D3D1C7',borderWidth:1,borderDash:[4,3],pointRadius:0}
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{
+    x:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:9},color:'#888780'}},
+    y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:9},color:'#888780'},min:-0.3,max:1.8}
+  }}});
+}
+function initCmp(){
+  destroy('compareChart');const ctx=document.getElementById('compareChart');if(!ctx)return;
+  charts['compareChart']=new Chart(ctx,{type:'line',data:{labels:MO,datasets:[
+    {label:'HDFC',data:IRS,borderColor:'#185FA5',borderWidth:2,pointRadius:2,tension:0.4,fill:false},
+    {label:'SBI',data:SBI,borderColor:'#3B6D11',borderWidth:2,pointRadius:2,borderDash:[5,3],tension:0.4,fill:false},
+    {label:'Base',data:BM,borderColor:'#D3D1C7',borderWidth:1,borderDash:[2,3],pointRadius:0}
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{
+    x:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:9},color:'#888780'}},
+    y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:9},color:'#888780'},min:-0.3,max:1.8}
+  }}});
+}
+function initDonut(){
+  destroy('donutChart');const ctx=document.getElementById('donutChart');if(!ctx)return;
+  const vals=[parseInt(document.getElementById('w1').value),parseInt(document.getElementById('w2').value),parseInt(document.getElementById('w3').value),parseInt(document.getElementById('w4').value),parseInt(document.getElementById('w5').value)];
+  charts['donutChart']=new Chart(ctx,{type:'doughnut',data:{datasets:[{data:vals,backgroundColor:['#185FA5','#378ADD','#85B7EB','#97C459','#D3D1C7'],borderWidth:2,borderColor:'#ffffff'}]},options:{responsive:true,maintainAspectRatio:false,cutout:'65%',plugins:{legend:{display:false}}}});
+}
+function updateWeights(){
+  const ids=['w1','w2','w3','w4','w5'];
+  const vals=ids.map(id=>parseInt(document.getElementById(id).value));
+  const total=vals.reduce((a,b)=>a+b,0);
+  ids.forEach((id,i)=>{document.getElementById('wv'+(i+1)).textContent=vals[i]+'%';document.getElementById('dl'+(i+1)).textContent=vals[i]+'%';});
+  const el=document.getElementById('wtotal');document.getElementById('wtv').textContent=total+'%';
+  el.className='wto '+(total===100?'wtok':'wtwarn');
+  if(charts['donutChart']){charts['donutChart'].data.datasets[0].data=vals;charts['donutChart'].update();}
+}
+function initScatter(){
+  destroy('scatterChart');const ctx=document.getElementById('scatterChart');if(!ctx)return;
+  const matched=[{x:0.92,y:0.45},{x:0.88,y:0.38},{x:0.84,y:0.30},{x:0.81,y:0.22}];
+  const others=[{x:1.42,y:0.18},{x:1.31,y:-0.05},{x:1.18,y:-0.08},{x:1.09,y:0.05},{x:0.98,y:-0.12},{x:0.84,y:-0.20},{x:1.25,y:0.12},{x:1.35,y:0.02},{x:1.15,y:-0.15}];
+  charts['scatterChart']=new Chart(ctx,{type:'scatter',data:{datasets:[
+    {label:'Matched',data:matched,backgroundColor:'rgba(24,95,165,0.8)',pointRadius:7,pointHoverRadius:9},
+    {label:'Others',data:others,backgroundColor:'rgba(180,178,169,0.5)',pointRadius:5,pointHoverRadius:7}
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`IR: ${c.parsed.x.toFixed(2)}, Slope: ${c.parsed.y.toFixed(2)}`}}},
+  scales:{
+    x:{title:{display:true,text:'1Y IR',font:{size:9},color:'#888780'},grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:9},color:'#888780'}},
+    y:{title:{display:true,text:'IR Slope',font:{size:9},color:'#888780'},grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:9},color:'#888780'}}
+  }}});
+}
+document.addEventListener('DOMContentLoaded',()=>{document.querySelector('[data-s=home]').classList.add('active');});
+</script>
+</body>
+</html>

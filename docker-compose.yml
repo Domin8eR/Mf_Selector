@@ -1,0 +1,100 @@
+version: "3.9"
+
+# Milestone 2: infrastructure + api, worker, beat.
+# frontend (web) service is wired in milestone 3.
+
+x-api-common: &api-common
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+  env_file: .env
+  volumes:
+    - ./backend:/app   # hot-reload in dev; remove for prod
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  # ------------------------------------------------------------------ #
+  # Infrastructure                                                        #
+  # ------------------------------------------------------------------ #
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: altstreet-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-altstreet}
+      POSTGRES_USER: ${POSTGRES_USER:-altstreet}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-altstreet_dev}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-altstreet} -d ${POSTGRES_DB:-altstreet}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: altstreet-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: altstreet-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-altstreet}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-altstreet_dev_secret}
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # MinIO web console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ #
+  # Application services                                                  #
+  # ------------------------------------------------------------------ #
+  api:
+    <<: *api-common
+    container_name: altstreet-api
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  worker:
+    <<: *api-common
+    container_name: altstreet-worker
+    command: celery -A app.jobs.celery_app.celery_app worker --loglevel=info --concurrency=2
+    restart: unless-stopped
+
+  beat:
+    <<: *api-common
+    container_name: altstreet-beat
+    command: celery -A app.jobs.celery_app.celery_app beat --loglevel=info
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

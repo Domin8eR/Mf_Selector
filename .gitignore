@@ -1,0 +1,131 @@
+# ============================================================
+# MFit — .gitignore
+# Covers: Python, Node/React, macOS, IDE/editor artefacts
+# ============================================================
+
+# ---- Python ------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+.installed.cfg
+lib/
+lib64/
+MANIFEST
+.Python
+.python-version.local
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+
+# mypy / ruff / black
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+
+# Alembic
+# (keep migrations tracked; ignore only run-time artefacts)
+
+# Jupyter
+.ipynb_checkpoints
+
+# ---- Node / React ------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pnp
+.pnp.js
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+dist/
+dist-ssr/
+*.local
+
+# Vite
+vite.config.ts.timestamp-*
+
+# ---- macOS -------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+Icon?
+.fseventsd
+.TemporaryItems
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.DocumentRevisions-V100
+.apdisk
+
+# ---- IDE / editor ------------------------------------------
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.tmproj
+*.esproj
+
+# ---- Docker ------------------------------------------------
+docker-compose.override.yml
+
+# ---- Secrets & env -----------------------------------------
+.env
+# Allow the example file
+!.env.example
+
+# ---- Generated outputs & uploads ---------------------------
+backend/uploads/
+backend/generated_reports/
+*.pdf
+*.docx
+*.csv.gz
+
+# ---- Logs --------------------------------------------------
+*.log
+logs/

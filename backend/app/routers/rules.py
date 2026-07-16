@@ -710,12 +710,18 @@ def sandbox_run_v2(
         for i, val in vals:
             universe[i][f"_pr_{col}"] = percentile_rank(val, universe_vals, direction)
 
-    # Weighted composite score
+    # Weighted composite score.
+    # Scale to 0-100 to match composite_score_v2 (the DB column default_score reads
+    # from) — percentile_rank() returns 0-1, so leaving it unscaled made sandbox_score
+    # and default_score differ by ~100x for the same fund under identical weights.
+    # Missing metrics default to the neutral midpoint (50 on the 0-100 scale), matching
+    # scripts/seed_category_rankings.py's fallback — not 0, which would apply the
+    # harshest possible penalty to funds with incomplete data.
     for f in universe:
         f["sandbox_score"] = sum(
-            f.get(f"_pr_{c.metric_column}", 0.0) * c.weight
+            f.get(f"_pr_{c.metric_column}", 0.5) * c.weight
             for c in valid_components
-        )
+        ) * 100.0
 
     # Build sandbox ranking
     sandbox_ranked = sorted(universe, key=lambda x: x["sandbox_score"], reverse=True)

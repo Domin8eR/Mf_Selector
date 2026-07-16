@@ -3,6 +3,8 @@ import json
 import anthropic
 import openai as openai_module
 from app.core.config import settings
+from app.ai.supervisor import _is_recommendation_request
+from app.ai.templates import CHAT_RECOMMENDATION_REFRAME_V1
 from .tool_result import ToolResult
 from . import scheme_tools, exposure_tools, holdings_tools, overlap_tools, company_tools
 
@@ -376,6 +378,19 @@ async def _run_openai(message: str) -> dict:
 
 
 async def run_research_chat(message: str) -> dict:
+    # Recommendation-reframe guard — same deterministic check app.ai.supervisor
+    # runs before the workspace chat calls an LLM. This endpoint (/api/research-chat)
+    # had no equivalent: the raw message went straight to the LLM with only a
+    # tool-usage system prompt, no compliance backstop. Reused here rather than
+    # reimplemented, per CLAUDE.md's language rule applying "everywhere" AI output
+    # is produced.
+    if _is_recommendation_request(message):
+        return {
+            "reply": CHAT_RECOMMENDATION_REFRAME_V1["answer"],
+            "table": None,
+            "tool_trace": [],
+        }
+
     if settings.llm_provider.lower() == "openai":
         return await _run_openai(message)
     return await _run_anthropic(message)

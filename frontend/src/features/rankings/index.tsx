@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import {
@@ -11,8 +11,8 @@ import {
 } from "recharts"
 import { cn } from "@/lib/utils"
 import {
-  rankingsV2Api, insightsApi,
-  type RankedFund, type ExplainComponent,
+  rankingsV2Api, insightsApi, metricsApiV2, schemesApi,
+  type RankedFund, type ExplainComponent, type GrowthPoint,
 } from "@/lib/api"
 import { queryKeys } from "@/lib/query-keys"
 import InsightPanel from "@/components/insights/InsightPanel"
@@ -42,6 +42,8 @@ const LINE_COLORS = [
 type SortKey = "rank" | "composite_score" | "ir_3yr" | "sharpe_3yr"
                | "active_ret_3yr" | "ir_slope_6m_proxy" | "tracking_error_3yr"
 
+type DrawerTab = "overview" | "explain-rank"
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtNum(v: number | null | undefined, decimals = 2): string {
   if (v == null) return "—"
@@ -70,114 +72,369 @@ function SortIcon({ col, active, dir }: { col: string; active: string; dir: "asc
     : <ChevronDown className="h-3 w-3 text-indigo-500" />
 }
 
-// ── Explain Rank Drawer ───────────────────────────────────────────────────────
-function ExplainDrawer({
+// ── Fund Preview Drawer (Overview + Explain Rank tabs) ────────────────────────
+function FundPreviewDrawer({
   schemecode,
   fundName,
   category,
+  defaultTab = "overview",
   onClose,
 }: {
   schemecode: number
   fundName: string
   category: string
+  defaultTab?: DrawerTab
   onClose: () => void
 }) {
-  const { data, isLoading } = useQuery({
+  const navigate = useNavigate()
+  const [activeTab, setActiveTab] = useState<DrawerTab>(defaultTab)
+  const fundId = String(schemecode)
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose()
+    }
+    document.addEventListener("keydown", handleKey)
+    return () => document.removeEventListener("keydown", handleKey)
+  }, [onClose])
+
+  // Explain Rank query
+  const explainQ = useQuery({
     queryKey: queryKeys.rankings.explain(schemecode, category),
     queryFn: () => rankingsV2Api.explain(schemecode, category),
   })
 
+  // Overview queries — same keys as Fund Detail so cache is shared
+  const summaryQ = useQuery({
+    queryKey: queryKeys.funds.summaryV2(fundId),
+    queryFn: () => metricsApiV2.getSummaryV2(fundId),
+  })
+  const growthQ = useQuery({
+    queryKey: queryKeys.funds.growthOf10k(fundId, "3Y"),
+    queryFn: () => metricsApiV2.getGrowthOf10k(fundId, "3Y"),
+  })
+  const holdingsQ = useQuery({
+    queryKey: queryKeys.funds.holdingsV2(fundId),
+    queryFn: () => schemesApi.getHoldingsV2(fundId, 20),
+  })
+  const insightsQ = useQuery({
+    queryKey: queryKeys.funds.insights(fundId),
+    queryFn: () => insightsApi.getFundInsights(schemecode),
+  })
+
+  const summary = summaryQ.data
+  const growth = growthQ.data
+  const holdings = holdingsQ.data
+  const insights = insightsQ.data
+  const explainData = explainQ.data
+
+  const growthChartData = growth ? (() => {
+    const bmMap = new Map<string, number>(
+      growth.benchmark_series.map((p: GrowthPoint) => [p.date, p.value])
+    )
+    return growth.fund_series.map((p: GrowthPoint) => ({
+      date: p.date.slice(0, 7),
+      fund: p.value,
+      bm: bmMap.get(p.date) ?? null,
+    }))
+  })() : []
+
+  const miniCards = summary ? [
+    { label: "IR (3Y)",        value: summary.information_ratio_3yr != null ? summary.information_ratio_3yr.toFixed(3) : "—" },
+    { label: "IR Slope",       value: summary.ir_slope_6m_proxy != null ? summary.ir_slope_6m_proxy.toFixed(4) : "—" },
+    { label: "Active Ret (3Y)",value: summary.active_3yr_ret != null ? `${summary.active_3yr_ret.toFixed(2)}%` : "—" },
+    { label: "Sharpe (3Y)",    value: summary.sharpe_ratio_3yr != null ? summary.sharpe_ratio_3yr.toFixed(3) : "—" },
+  ] : []
+
+  const top5Holdings = (holdings?.holdings ?? []).slice(0, 5)
+  const top2Insights = (insights?.cards ?? []).slice(0, 2)
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-md bg-white shadow-2xl flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b">
-          <div>
-            <p className="text-xs text-gray-500 mb-0.5">Rank Explanation</p>
-            <h2 className="text-sm font-semibold text-gray-900 leading-tight">{fundName}</h2>
-          </div>
-          <button onClick={onClose} className="p-1.5 rounded hover:bg-gray-100">
+      <div className="relative z-10 w-full max-w-lg bg-white shadow-2xl flex flex-col">
+
+        {/* ── Header ─────────────────────────────────────────────── */}
+        <div className="flex items-center justify-between px-5 py-4 border-b shrink-0">
+          <h2 className="text-sm font-semibold text-gray-900 leading-tight truncate pr-2">{fundName}</h2>
+          <button onClick={onClose} className="p-1.5 rounded hover:bg-gray-100 shrink-0">
             <X className="h-4 w-4 text-gray-500" />
           </button>
         </div>
 
-        {isLoading ? (
-          <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
-            Loading breakdown…
-          </div>
-        ) : !data ? (
-          <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
-            No data available.
-          </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-            <div className="flex flex-wrap gap-2">
-              <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-xs font-medium border border-indigo-200">
-                Rank {data.rank} / {data.total_in_category}
-              </span>
-              <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium", STATUS_COLOURS[data.status_label] ?? "bg-gray-50 text-gray-600 border border-gray-200")}>
-                {data.status_label}
-              </span>
-              <span className="px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 text-xs border border-gray-200">
-                Score {data.composite_score.toFixed(1)} / 100
-              </span>
-              <span className="px-2 py-0.5 rounded-full bg-gray-50 text-gray-600 text-xs border border-gray-200">
-                Confidence: {data.confidence}
-              </span>
-            </div>
+        {/* ── Tab bar ────────────────────────────────────────────── */}
+        <div className="flex border-b shrink-0 bg-gray-50">
+          {(["overview", "explain-rank"] as DrawerTab[]).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                "px-5 py-2.5 text-xs font-medium border-b-2 transition-colors",
+                activeTab === tab
+                  ? "border-indigo-500 text-indigo-700 bg-white"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              )}
+            >
+              {tab === "overview" ? "Overview" : "Explain Rank"}
+            </button>
+          ))}
+        </div>
 
-            <div>
-              <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
-                Score Breakdown
-              </p>
-              <div className="space-y-3">
-                {data.components.map((c: ExplainComponent) => (
-                  <div key={c.component_id}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs text-gray-600">{c.label_display}</span>
-                      <span className="text-xs font-mono text-gray-800">
-                        +{c.contribution.toFixed(2)} pts
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-indigo-500 rounded-full"
-                          style={{ width: `${Math.min(c.percentile_score, 100)}%` }}
-                        />
-                      </div>
-                      <span className="text-xs text-gray-500 w-14 text-right">
-                        {c.percentile_score.toFixed(0)}th pct
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between mt-0.5">
-                      <span className="text-[10px] text-gray-400">
-                        Raw: {c.raw_value != null ? c.raw_value.toFixed(4) : "—"}
-                        &nbsp;·&nbsp;weight {(c.weight * 100).toFixed(0)}%
-                        &nbsp;·&nbsp;{c.direction === "higher_better" ? "↑ higher = better" : "↓ lower = better"}
-                      </span>
-                    </div>
-                    {c.data_note && (
-                      <p className="text-[10px] text-amber-600 mt-0.5 flex items-start gap-0.5">
-                        <Info className="h-3 w-3 mt-0.5 shrink-0" />
-                        {c.data_note}
-                      </p>
+        {/* ── Tab content ────────────────────────────────────────── */}
+        <div className="flex-1 overflow-y-auto">
+
+          {/* ═══ OVERVIEW ═══════════════════════════════════════════ */}
+          {activeTab === "overview" && (
+            <div className="px-5 py-4 space-y-5">
+
+              {/* Fund header */}
+              {summaryQ.isLoading ? (
+                <div className="space-y-2">
+                  <div className="h-3.5 w-48 animate-pulse bg-gray-100 rounded" />
+                  <div className="h-3 w-32 animate-pulse bg-gray-100 rounded" />
+                </div>
+              ) : summaryQ.isError ? (
+                <p className="text-xs text-red-500">Unable to load fund summary.</p>
+              ) : summary ? (
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-gray-700 truncate">{summary.amc_name}</p>
+                    <p className="text-[11px] text-gray-500 mt-0.5 truncate">{summary.category}</p>
+                    {summary.benchmark && (
+                      <p className="text-[10px] text-gray-400 mt-0.5 truncate">vs {summary.benchmark}</p>
                     )}
                   </div>
-                ))}
-              </div>
-            </div>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    {summary.rank_in_category != null && summary.total_in_category != null && (
+                      <span className="text-xs font-semibold text-indigo-700">
+                        Rank {summary.rank_in_category}/{summary.total_in_category}
+                      </span>
+                    )}
+                    {summary.composite_score != null && (
+                      <span className="text-[10px] text-gray-500">
+                        Score {summary.composite_score.toFixed(1)}
+                      </span>
+                    )}
+                    {summary.tier && (
+                      <span className={cn(
+                        "text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+                        STATUS_COLOURS[summary.tier] ?? "bg-gray-50 text-gray-600 border border-gray-200"
+                      )}>
+                        {summary.tier}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ) : null}
 
-            <div className="bg-gray-50 rounded-lg p-3 text-[11px] text-gray-500 space-y-0.5 border border-gray-100">
-              <p><span className="font-medium text-gray-700">Rule version:</span> {data.rule_version}</p>
-              <p><span className="font-medium text-gray-700">Evaluated on:</span> {data.evaluation_date}</p>
-              <p><span className="font-medium text-gray-700">Data version:</span> {data.data_version} · calc {data.calculation_version}</p>
-              <p className="text-[10px] text-gray-400 mt-1">
-                Scores are pre-computed percentile ranks within category — no AI was used in metric calculation.
-              </p>
+              {/* 4 metric mini-cards */}
+              {summaryQ.isLoading ? (
+                <div className="grid grid-cols-2 gap-2">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="h-14 animate-pulse bg-gray-100 rounded-lg" />
+                  ))}
+                </div>
+              ) : miniCards.length > 0 ? (
+                <div className="grid grid-cols-2 gap-2">
+                  {miniCards.map((c) => (
+                    <div key={c.label} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5">
+                      <p className="text-[10px] text-gray-500 uppercase tracking-wide leading-tight">{c.label}</p>
+                      <p className="text-sm font-semibold text-gray-800 font-mono mt-1">{c.value}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              {/* Growth of ₹10,000 (3Y) chart — compact */}
+              <div>
+                <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">
+                  Growth of ₹10,000 (3Y)
+                </p>
+                {growthQ.isLoading ? (
+                  <div className="h-36 animate-pulse bg-gray-100 rounded-lg" />
+                ) : growthQ.isError ? (
+                  <p className="text-xs text-red-500 py-2">Unable to load chart data.</p>
+                ) : growthChartData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={148}>
+                    <LineChart data={growthChartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fontSize: 8, fill: "#9ca3af" }}
+                        tickLine={false}
+                        interval="preserveStartEnd"
+                      />
+                      <YAxis
+                        tick={{ fontSize: 8, fill: "#9ca3af" }}
+                        tickLine={false}
+                        axisLine={false}
+                        width={40}
+                        tickFormatter={(v: number) => `₹${(v / 1000).toFixed(1)}k`}
+                      />
+                      <Tooltip
+                        formatter={(v: unknown) => [
+                          `₹${(v as number).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`,
+                          "",
+                        ]}
+                        contentStyle={{ fontSize: 9 }}
+                      />
+                      <Line dataKey="fund" name="Fund" stroke="#2563eb" dot={false} strokeWidth={2} />
+                      <Line
+                        dataKey="bm"
+                        name={growth?.benchmark_name ?? "Benchmark"}
+                        stroke="#9333ea"
+                        dot={false}
+                        strokeWidth={1.5}
+                        strokeDasharray="4 2"
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <p className="text-xs text-gray-400 py-2">No chart data available.</p>
+                )}
+              </div>
+
+              {/* Top 5 holdings */}
+              <div>
+                <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">
+                  Top Holdings
+                  {holdings?.as_of_date && (
+                    <span className="ml-1.5 text-[10px] text-gray-400 normal-case font-normal">
+                      as of {holdings.as_of_date}
+                    </span>
+                  )}
+                </p>
+                {holdingsQ.isLoading ? (
+                  <div className="space-y-1.5">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <div key={i} className="h-5 animate-pulse bg-gray-100 rounded" />
+                    ))}
+                  </div>
+                ) : holdingsQ.isError ? (
+                  <p className="text-xs text-red-500">Unable to load holdings.</p>
+                ) : top5Holdings.length === 0 ? (
+                  <p className="text-xs text-gray-400">No holdings data available.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {top5Holdings.map((h, i) => (
+                      <div key={i} className="flex items-start justify-between text-xs gap-2">
+                        <div className="min-w-0">
+                          <span className="text-gray-800 font-medium block truncate">{h.company_name}</span>
+                          {h.sector && (
+                            <span className="text-[10px] text-gray-400">{h.sector}</span>
+                          )}
+                        </div>
+                        <span className="font-mono text-gray-600 shrink-0">{h.weight_pct.toFixed(2)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Up to 2 FUND_* insight cards */}
+              {(insightsQ.isLoading || top2Insights.length > 0) && (
+                <div>
+                  <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">
+                    <BarChart2 className="inline h-3.5 w-3.5 mr-1 text-gray-500" />
+                    Insights
+                  </p>
+                  <InsightPanel cards={top2Insights} isLoading={insightsQ.isLoading} />
+                </div>
+              )}
+
+              {/* View full details */}
+              <button
+                onClick={() => navigate(`/funds/${schemecode}`)}
+                className="w-full flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition"
+              >
+                View full details <ChevronRight className="h-4 w-4" />
+              </button>
             </div>
-          </div>
-        )}
+          )}
+
+          {/* ═══ EXPLAIN RANK (unchanged from original ExplainDrawer) ══════ */}
+          {activeTab === "explain-rank" && (
+            <div className="px-5 py-4 space-y-5">
+              {explainQ.isLoading ? (
+                <div className="flex items-center justify-center py-12 text-gray-400 text-sm">
+                  Loading breakdown…
+                </div>
+              ) : !explainData ? (
+                <div className="flex items-center justify-center py-12 text-gray-400 text-sm">
+                  No data available.
+                </div>
+              ) : (
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-xs font-medium border border-indigo-200">
+                      Rank {explainData.rank} / {explainData.total_in_category}
+                    </span>
+                    <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium", STATUS_COLOURS[explainData.status_label] ?? "bg-gray-50 text-gray-600 border border-gray-200")}>
+                      {explainData.status_label}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 text-xs border border-gray-200">
+                      Score {explainData.composite_score.toFixed(1)} / 100
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-gray-50 text-gray-600 text-xs border border-gray-200">
+                      Confidence: {explainData.confidence}
+                    </span>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
+                      Score Breakdown
+                    </p>
+                    <div className="space-y-3">
+                      {explainData.components.map((c: ExplainComponent) => (
+                        <div key={c.component_id}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs text-gray-600">{c.label_display}</span>
+                            <span className="text-xs font-mono text-gray-800">
+                              +{c.contribution.toFixed(2)} pts
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-indigo-500 rounded-full"
+                                style={{ width: `${Math.min(c.percentile_score, 100)}%` }}
+                              />
+                            </div>
+                            <span className="text-xs text-gray-500 w-14 text-right">
+                              {c.percentile_score.toFixed(0)}th pct
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between mt-0.5">
+                            <span className="text-[10px] text-gray-400">
+                              Raw: {c.raw_value != null ? c.raw_value.toFixed(4) : "—"}
+                              &nbsp;·&nbsp;weight {(c.weight * 100).toFixed(0)}%
+                              &nbsp;·&nbsp;{c.direction === "higher_better" ? "↑ higher = better" : "↓ lower = better"}
+                            </span>
+                          </div>
+                          {c.data_note && (
+                            <p className="text-[10px] text-amber-600 mt-0.5 flex items-start gap-0.5">
+                              <Info className="h-3 w-3 mt-0.5 shrink-0" />
+                              {c.data_note}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-gray-50 rounded-lg p-3 text-[11px] text-gray-500 space-y-0.5 border border-gray-100">
+                    <p><span className="font-medium text-gray-700">Rule version:</span> {explainData.rule_version}</p>
+                    <p><span className="font-medium text-gray-700">Evaluated on:</span> {explainData.evaluation_date}</p>
+                    <p><span className="font-medium text-gray-700">Data version:</span> {explainData.data_version} · calc {explainData.calculation_version}</p>
+                    <p className="text-[10px] text-gray-400 mt-1">
+                      Scores are pre-computed percentile ranks within category — no AI was used in metric calculation.
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -311,11 +568,13 @@ function FundRow({
   fund,
   isSelected,
   onToggleSelect,
+  onRowClick,
   onExplain,
 }: {
   fund: RankedFund
   isSelected: boolean
   onToggleSelect: () => void
+  onRowClick: () => void
   onExplain: () => void
 }) {
   const rank = fund.rank
@@ -331,8 +590,15 @@ function FundRow({
     : "text-gray-500"
 
   return (
-    <tr className={cn("border-b border-gray-50 hover:bg-gray-50/60 transition-colors", isSelected && "bg-indigo-50/30")}>
-      <td className="px-3 py-2 text-center">
+    <tr
+      className={cn(
+        "border-b border-gray-50 hover:bg-gray-50/60 transition-colors cursor-pointer",
+        isSelected && "bg-indigo-50/30"
+      )}
+      onClick={onRowClick}
+    >
+      {/* Checkbox — stop propagation so it doesn't also open the drawer */}
+      <td className="px-3 py-2 text-center" onClick={(e) => e.stopPropagation()}>
         <input
           type="checkbox"
           checked={isSelected}
@@ -347,7 +613,7 @@ function FundRow({
       </td>
       <td className="px-3 py-2 max-w-[200px]">
         <span
-          className="text-xs font-medium text-gray-900 hover:text-indigo-700 cursor-pointer line-clamp-2"
+          className="text-xs font-medium text-gray-900 line-clamp-2"
           title={fund.fund_name}
         >
           {fund.fund_name}
@@ -382,7 +648,8 @@ function FundRow({
       <td className="px-3 py-2 text-center">
         {fmtDelta(fund.rank_delta_6m != null ? -fund.rank_delta_6m : null)}
       </td>
-      <td className="px-3 py-2">
+      {/* ChevronRight — icon-only button, stops propagation, opens Explain Rank tab */}
+      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
         <button
           onClick={onExplain}
           className="p-1 rounded hover:bg-indigo-50 group transition"
@@ -408,7 +675,11 @@ export default function CategoryRankingsPage() {
   const [sortKey, setSortKey] = useState<SortKey>("rank")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
   const [selected, setSelected] = useState<Set<number>>(new Set())
-  const [explainFund, setExplainFund] = useState<{ schemecode: number; name: string } | null>(null)
+  const [previewFund, setPreviewFund] = useState<{
+    schemecode: number
+    name: string
+    defaultTab: DrawerTab
+  } | null>(null)
 
   const { data: rankData, isLoading: rankLoading } = useQuery({
     queryKey: queryKeys.rankings.v2Category(category, undefined, debouncedSearch, page),
@@ -610,7 +881,8 @@ export default function CategoryRankingsPage() {
                       fund={fund}
                       isSelected={selected.has(fund.schemecode)}
                       onToggleSelect={() => toggleSelect(fund.schemecode)}
-                      onExplain={() => setExplainFund({ schemecode: fund.schemecode, name: fund.fund_name })}
+                      onRowClick={() => setPreviewFund({ schemecode: fund.schemecode, name: fund.fund_name, defaultTab: "overview" })}
+                      onExplain={() => setPreviewFund({ schemecode: fund.schemecode, name: fund.fund_name, defaultTab: "explain-rank" })}
                     />
                   ))
                 )}
@@ -659,12 +931,13 @@ export default function CategoryRankingsPage() {
         </div>
       </div>
 
-      {explainFund && (
-        <ExplainDrawer
-          schemecode={explainFund.schemecode}
-          fundName={explainFund.name}
+      {previewFund && (
+        <FundPreviewDrawer
+          schemecode={previewFund.schemecode}
+          fundName={previewFund.name}
           category={category}
-          onClose={() => setExplainFund(null)}
+          defaultTab={previewFund.defaultTab}
+          onClose={() => setPreviewFund(null)}
         />
       )}
     </div>

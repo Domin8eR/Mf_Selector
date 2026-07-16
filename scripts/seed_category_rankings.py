@@ -19,6 +19,9 @@ from decimal import Decimal
 import psycopg2
 from psycopg2.extras import execute_values
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
+from app.quant.metrics import percentile_rank as _quant_percentile_rank  # noqa: E402
+
 DSN = os.environ.get(
     "DATABASE_URL",
     "postgresql://piyushrajlenka:29062002@localhost:5432/Altstreet_AI",
@@ -64,17 +67,18 @@ def percentile_rank(value: float, all_values: list[float], higher_better: bool) 
     Return a 0-100 percentile score for value within all_values.
     higher_better=True  → higher raw value = higher score
     higher_better=False → lower raw value = higher score (inverted)
+
+    Delegates to app.quant.metrics.percentile_rank (the canonical, unit-tested
+    implementation) instead of maintaining a second copy of the tie-breaking
+    logic — this used to be an independent reimplementation that diverged
+    from the quant module (exclusive vs inclusive tie-counting, empty-universe
+    default), which caused sandbox previews to disagree with live rankings
+    even when weights were unchanged.
     """
     if not all_values:
         return 50.0
-    sorted_vals = sorted(all_values)
-    n = len(sorted_vals)
-    # count how many values are strictly below
-    below = sum(1 for v in sorted_vals if v < value)
-    pct = below / n * 100.0
-    if not higher_better:
-        pct = 100.0 - pct
-    return round(pct, 2)
+    direction = "higher_better" if higher_better else "lower_better"
+    return round(_quant_percentile_rank(value, all_values, direction) * 100.0, 2)
 
 
 def linear_slope(ys: list[float]) -> float:

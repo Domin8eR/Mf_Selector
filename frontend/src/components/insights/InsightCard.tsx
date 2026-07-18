@@ -1,7 +1,8 @@
+import { useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { MessageSquare, ChevronRight, BarChart2, ListFilter, GitCompare } from "lucide-react"
+import { ChevronDown, ChevronUp, MessageSquare } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { InsightCardData, FollowUpAction } from "@/lib/api"
+import type { InsightCardData, FollowUpPayload } from "@/lib/api"
 
 const SEVERITY_BORDER: Record<string, string> = {
   positive: "border-l-green-500",
@@ -10,36 +11,55 @@ const SEVERITY_BORDER: Record<string, string> = {
   neutral:  "border-l-slate-400",
 }
 
-const ACTION_ICONS: Record<string, typeof MessageSquare> = {
-  open_research_chat_with_context:   MessageSquare,
-  open_category_rankings_filtered:   ListFilter,
-  open_fund_detail:                  BarChart2,
-  open_fund_comparison:              GitCompare,
-  open_rule_playground:              ListFilter,
+// Renders **bold** markers as real bold — never literal asterisks.
+function renderBold(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g)
+  return parts.map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={i} className="font-semibold text-gray-900">{part.slice(2, -2)}</strong>
+    }
+    return <span key={i}>{part}</span>
+  })
 }
 
+function formatChipValue(v: unknown): string {
+  if (v === null || v === undefined || v === "n/a") return "—"
+  if (typeof v === "number") return Number.isInteger(v) ? String(v) : v.toFixed(2)
+  return String(v)
+}
+
+function formatChipKey(k: string): string {
+  return k.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
+}
+
+// CompactInsightCard — shared by every page (Home, Category Rankings, Fund
+// Detail, Fund Comparison, Rule Playground). Collapsed: compact sentence +
+// 2-3 metric chips. Expanded (click/tap): 2-5 bullets. Same bold rule in
+// both. One follow-up action, wired to the canonical payload shape.
 export default function InsightCard({ card }: { card: InsightCardData }) {
   const navigate = useNavigate()
+  const [expanded, setExpanded] = useState(false)
 
-  const handleAction = (action: FollowUpAction) => {
-    switch (action.action_type) {
-      case "open_category_rankings_filtered":
-        navigate("/rankings")
-        break
-      case "open_fund_detail":
-        navigate(`/funds/${action.llm_context_payload?.schemecode ?? ""}`)
-        break
-      case "open_fund_comparison":
-        navigate("/compare")
-        break
-      case "open_research_chat_with_context":
-        navigate("/research-chat")
-        break
-      case "open_rule_playground":
-        navigate("/rule-playground")
-        break
+  const handleFollowUp = (payload: FollowUpPayload | null) => {
+    if (!payload) {
+      navigate("/chat")
+      return
     }
+    const params = new URLSearchParams({
+      from: payload.page,
+      schemecode: payload.entity_id || "",
+      fund_name: payload.entity_name || "",
+      facts_json: JSON.stringify(payload.facts ?? {}),
+      // Canonical follow-up context (2026-07-18) — sent as `context` on the
+      // /chat/query POST body by ChatPage, not as a separate query param;
+      // encoded here too so a fresh chat session opened via URL still has it.
+      context: JSON.stringify(payload),
+    })
+    navigate(`/chat?${params.toString()}`)
   }
+
+  const followUp = card.follow_up_actions[0]
+  const chipEntries = Object.entries(card.chips ?? {}).slice(0, 3)
 
   return (
     <div
@@ -48,24 +68,55 @@ export default function InsightCard({ card }: { card: InsightCardData }) {
         SEVERITY_BORDER[card.severity] ?? SEVERITY_BORDER.neutral,
       )}
     >
-      <div className="text-sm font-semibold text-gray-800 mb-1">{card.headline}</div>
-      <div className="text-xs text-gray-500 leading-relaxed">{card.body_text}</div>
+      <button
+        className="w-full text-left"
+        onClick={() => setExpanded(e => !e)}
+        aria-expanded={expanded}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-sm text-gray-800 leading-snug flex-1">
+            {renderBold(card.compact_text)}
+          </p>
+          {expanded
+            ? <ChevronUp className="h-4 w-4 text-gray-400 flex-shrink-0 mt-0.5" />
+            : <ChevronDown className="h-4 w-4 text-gray-400 flex-shrink-0 mt-0.5" />}
+        </div>
 
-      {card.follow_up_actions.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mt-2">
-          {card.follow_up_actions.map(action => {
-            const Icon = ACTION_ICONS[action.action_type] ?? ChevronRight
-            return (
-              <button
-                key={action.action_id}
-                onClick={() => handleAction(action)}
-                className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:bg-blue-50 rounded px-2 py-1 transition-colors"
+        {chipEntries.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {chipEntries.map(([k, v]) => (
+              <span
+                key={k}
+                className="text-[10px] bg-gray-50 border border-gray-200 rounded-full px-2 py-0.5 text-gray-600"
               >
-                <Icon className="h-3 w-3" />
-                {action.label}
-              </button>
-            )
-          })}
+                <span className="text-gray-400">{formatChipKey(k)}:</span>{" "}
+                <span className="font-medium text-gray-700">{formatChipValue(v)}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </button>
+
+      {expanded && (
+        <ul className="mt-3 space-y-1 border-t border-gray-100 pt-2">
+          {card.expanded_bullets.map((bullet, i) => (
+            <li key={i} className="text-xs text-gray-600 leading-relaxed flex gap-1.5">
+              <span className="text-gray-300 flex-shrink-0">•</span>
+              <span>{renderBold(bullet)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {followUp && (
+        <div className="mt-2">
+          <button
+            onClick={(e) => { e.stopPropagation(); handleFollowUp(followUp.llm_context_payload) }}
+            className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:bg-blue-50 rounded px-2 py-1 transition-colors"
+          >
+            <MessageSquare className="h-3 w-3" />
+            {followUp.label}
+          </button>
         </div>
       )}
     </div>

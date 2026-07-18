@@ -5,11 +5,32 @@ from datetime import date, datetime
 from pydantic import BaseModel, Field
 
 
+class FollowUpPayload(BaseModel):
+    """Canonical follow-up LLM context payload (2026-07-18 migration).
+
+    Passed verbatim to Research Chat when a user clicks a follow-up action
+    on an insight card — the LLM must not rediscover these facts, and per
+    the LLM rule, must not contradict allowed_conclusion.
+    """
+    page: str
+    insight_code: str
+    entity_id: str = ""
+    entity_name: str = ""
+    evaluation_date: str = ""
+    facts: dict = Field(default_factory=dict)
+    allowed_conclusion: str = ""
+    forbidden_conclusions: list[str] = Field(default_factory=list)
+    source_tables: list[str] = Field(default_factory=list)
+    rule_version_id: str = ""
+    data_version_id: str = ""
+    calculation_version_id: str = ""
+
+
 class FollowUpAction(BaseModel):
     action_id: str
     label: str
     action_type: str
-    llm_context_payload: dict | None = None
+    llm_context_payload: FollowUpPayload | None = None
 
 
 class InsightCard(BaseModel):
@@ -17,12 +38,23 @@ class InsightCard(BaseModel):
     insight_code: str
     severity: str = Field(description="positive | warning | neutral | negative")
     priority: int = 100
-    headline: str
-    body_text: str
+    compact_text: str
+    expanded_bullets: list[str] = Field(default_factory=list)
+    chips: dict = Field(default_factory=dict)
     facts_json: dict = Field(default_factory=dict)
     generated_by: str = "deterministic_template"
     prompt_tokens: int = 0
     follow_up_actions: list[FollowUpAction] = Field(default_factory=list)
+    # Deprecated aliases kept during the compact-card migration so any
+    # not-yet-updated caller reading .headline/.body_text doesn't crash —
+    # new code should use compact_text/expanded_bullets.
+    @property
+    def headline(self) -> str:
+        return self.compact_text
+
+    @property
+    def body_text(self) -> str:
+        return "\n".join(self.expanded_bullets)
 
 
 class InsightResponse(BaseModel):

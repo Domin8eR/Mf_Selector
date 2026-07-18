@@ -15,8 +15,11 @@ from app.routers.workspaces import (
     router as workspaces_router,
     _interpret_router as workspace_interpret_router,
 )
-from app.research_chat.router import router as research_chat_router
 from app.insights.router import router as insights_router
+# app.research_chat.router is decommissioned as of the 2026-07-17 merge — its
+# capability was folded into app.ai.tools / app.routers.chat (/chat). Left
+# unimported here deliberately; the module itself is left in place, not
+# deleted, so this is reversible if something surfaces that still needs it.
 from app.schemas.base import VersionedResponse
 
 logger = structlog.get_logger(__name__)
@@ -49,7 +52,6 @@ app.include_router(rules.router)
 app.include_router(chat.router)
 app.include_router(data_quality.router)
 app.include_router(compare.router)
-app.include_router(research_chat_router)
 app.include_router(insights_router)
 app.include_router(alerts_router)
 app.include_router(workspaces_router)

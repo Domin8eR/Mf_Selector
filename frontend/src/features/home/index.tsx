@@ -9,9 +9,9 @@ import { queryKeys } from "@/lib/query-keys"
 import {
   healthApi, insightsApi, workspacesApi, alertsApi,
   rankingRunsApi, dataQualityApi,
-  type InsightCardData,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import InsightCard from "@/components/insights/InsightCard"
 
 // ── Language-rule compliant quick-action labels (no "recommend", "buy", "sell") ──
 const QUICK_ACTIONS = [
@@ -21,24 +21,6 @@ const QUICK_ACTIONS = [
   { label: "Build a new rule", to: "/rule-lab" },
 ] as const
 
-// ── Severity styles for insight cards ──────────────────────────────────────────
-function severityStyle(s: InsightCardData["severity"]) {
-  return {
-    positive: "bg-green-50 border-green-200 text-green-800",
-    warning:  "bg-amber-50 border-amber-200 text-amber-800",
-    negative: "bg-red-50 border-red-200 text-red-800",
-    neutral:  "bg-blue-50 border-blue-200 text-blue-800",
-  }[s] ?? "bg-gray-50 border-gray-200 text-gray-700"
-}
-
-function severityDot(s: InsightCardData["severity"]) {
-  return {
-    positive: "bg-green-500",
-    warning:  "bg-amber-500",
-    negative: "bg-red-500",
-    neutral:  "bg-blue-400",
-  }[s] ?? "bg-gray-400"
-}
 
 // ── Shared card shell ──────────────────────────────────────────────────────────
 function CardShell({
@@ -129,7 +111,7 @@ function DailyBriefingCard() {
       icon={Sparkles}
       title="Daily Briefing"
       linkLabel="View all"
-      linkTo="/research-chat"
+      linkTo="/chat"
     >
       {isLoading ? (
         <LoadingState rows={3} />
@@ -139,28 +121,14 @@ function DailyBriefingCard() {
         <EmptyState
           message="No insights available for today."
           cta="Go to Research Chat"
-          ctaTo="/research-chat"
+          ctaTo="/chat"
         />
       ) : (
-        <ul className="space-y-2">
+        <div className="space-y-2">
           {cards.slice(0, 4).map((card) => (
-            <li
-              key={`${card.template_id}-${card.headline}`}
-              className={cn(
-                "rounded-lg border px-3 py-2 text-xs",
-                severityStyle(card.severity),
-              )}
-            >
-              <div className="flex items-start gap-2">
-                <span className={cn("mt-1 h-2 w-2 rounded-full flex-shrink-0", severityDot(card.severity))} />
-                <div className="min-w-0">
-                  <p className="font-semibold leading-snug">{card.headline}</p>
-                  <p className="mt-0.5 text-[11px] opacity-80 leading-snug">{card.body_text}</p>
-                </div>
-              </div>
-            </li>
+            <InsightCard key={`${card.template_id}-${card.compact_text}`} card={card} />
           ))}
-        </ul>
+        </div>
       )}
       {data && (
         <p className="text-[10px] text-gray-400">
@@ -191,14 +159,14 @@ function RecentWorkspacesCard() {
         <EmptyState
           message="No saved workspaces yet."
           cta="Open Research Chat to start one"
-          ctaTo="/research-chat"
+          ctaTo="/chat"
         />
       ) : (
         <ul className="space-y-1">
           {workspaces.map((ws) => (
             <li key={ws.id}>
               <button
-                onClick={() => navigate("/research-chat")}
+                onClick={() => navigate("/chat")}
                 className="w-full flex items-center gap-2 rounded-lg px-3 py-2 hover:bg-gray-50 text-xs text-left"
               >
                 <Clock className="h-3 w-3 text-blue-400 flex-shrink-0" />
@@ -454,11 +422,13 @@ export default function HomePage() {
             placeholder="Ask MFit anything about funds, rankings, rules, or data…"
             className="flex-1 bg-transparent outline-none text-sm text-gray-700 placeholder:text-gray-400"
             onKeyDown={(e) => {
-              if (e.key === "Enter" && query.trim()) navigate("/research-chat")
+              if (e.key === "Enter" && query.trim()) {
+                navigate(`/chat?from=home&q=${encodeURIComponent(query.trim())}`)
+              }
             }}
           />
           <button
-            onClick={() => query.trim() && navigate("/research-chat")}
+            onClick={() => query.trim() && navigate(`/chat?from=home&q=${encodeURIComponent(query.trim())}`)}
             className="h-7 w-7 bg-blue-600 rounded-lg flex items-center justify-center text-white hover:bg-blue-700 flex-shrink-0"
             aria-label="Submit query"
           >

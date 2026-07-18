@@ -183,3 +183,95 @@ def test_suggested_next_actions_present(client: TestClient):
     data = resp.json()
     assert isinstance(data["suggested_next_actions"], list)
     assert len(data["suggested_next_actions"]) > 0
+
+
+# ── Merged-from-research_chat capability E2E tests (2026-07-17) ──────────────
+# These four intents (scheme_filter, holdings_lookup, overlap_search,
+# company_exposure) route through the SAME /chat/query endpoint as every
+# other intent — there is no second endpoint anymore.
+
+def test_scheme_filter_e2e(client: TestClient):
+    resp = client.post("/chat/query", json={
+        "message": "List large cap schemes with AUM over 5000 crore"
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["intent"] == "scheme_filter"
+    tool_names = [tc["tool"] for tc in data["tool_calls"]]
+    assert "filter_schemes" in tool_names
+    assert data["result_component_type"] == "table"
+    assert data["table_rows"] and len(data["table_rows"]) > 0
+
+
+def test_holdings_lookup_e2e(client: TestClient):
+    resp = client.post("/chat/query", json={
+        "message": "What are the top holdings of PGIM India Large Cap Fund - Direct Plan - Dividend?"
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["intent"] == "holdings_lookup"
+    tool_names = [tc["tool"] for tc in data["tool_calls"]]
+    assert "get_holdings" in tool_names
+    assert data["table_rows"] and len(data["table_rows"]) > 0
+
+
+def test_overlap_search_e2e(client: TestClient):
+    resp = client.post("/chat/query", json={
+        "message": (
+            "What is the overlap between PGIM India Large Cap Fund - Direct Plan - Dividend "
+            "and PGIM India Large Cap Fund - Direct Plan - Growth?"
+        )
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["intent"] == "overlap_search"
+    tool_names = [tc["tool"] for tc in data["tool_calls"]]
+    assert "compare_holdings_overlap" in tool_names
+    assert data["result_component_type"] == "table"
+
+
+def test_company_exposure_e2e(client: TestClient):
+    resp = client.post("/chat/query", json={
+        "message": "Which funds hold more than 5% in HDFC Bank?"
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["intent"] == "company_exposure"
+    tool_names = [tc["tool"] for tc in data["tool_calls"]]
+    assert "get_company_exposure" in tool_names
+    assert data["table_rows"] is not None
+
+
+# ── Recommendation guard on the new intents (Python-level, per instruction:
+# don't assume the existing guard "just works" for untested paths) ───────────
+
+NEW_INTENT_REFRAME_PHRASINGS = [
+    # scheme_filter-shaped
+    "Which HDFC scheme should I buy for my portfolio?",
+    "Should I invest in one of these large cap AUM schemes?",
+    # holdings_lookup-shaped
+    "Should I invest based on this fund's top holdings?",
+    "Is this fund's concentration a good pick for me?",
+    # overlap_search-shaped
+    "Given the overlap, which of these two should I hold?",
+    "Which of these overlapping funds is the better choice for me?",
+    # company_exposure-shaped
+    "Should I buy the fund with the most exposure to HDFC Bank?",
+    "Which of these HDFC Bank-holding funds would you recommend?",
+]
+
+
+def test_recommendation_guard_covers_new_intents_python():
+    from app.ai.supervisor import _is_recommendation_request
+
+    missed = [p for p in NEW_INTENT_REFRAME_PHRASINGS if not _is_recommendation_request(p)]
+    assert missed == [], f"Guard missed on new-intent-shaped phrasing: {missed}"
+
+
+def test_recommendation_guard_covers_new_intents_api(client: TestClient):
+    for message in NEW_INTENT_REFRAME_PHRASINGS[:4]:
+        resp = client.post("/chat/query", json={"message": message})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["intent"] == "recommendation_request", f"Guard did not fire for: {message!r}"
+        assert data["tool_calls"] == []

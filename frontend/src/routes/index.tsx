@@ -9,8 +9,10 @@ import ChatPage from "@/features/chat"
 import RulePlaygroundPage from "@/features/rule-playground"
 import RuleApprovalPage from "@/features/rule-approval"
 import DataQualityPage from "@/features/data-quality"
-import ResearchChatPage from "@/features/research-chat"
 import WorkspacePage from "@/features/workspace"
+// features/research-chat and its backend (app/research_chat) are decommissioned
+// as of the 2026-07-17 merge — capability folded into /chat (see app/ai/tools.py
+// docstring). Left in place, unreferenced, for reversibility — not deleted.
 
 export const router = createBrowserRouter([
   {
@@ -26,7 +28,6 @@ export const router = createBrowserRouter([
       { path: "rule-playground", element: <RulePlaygroundPage /> },
       { path: "rule-approval", element: <RuleApprovalPage /> },
       { path: "data-quality", element: <DataQualityPage /> },
-      { path: "research-chat", element: <ResearchChatPage /> },
       { path: "workspace", element: <WorkspacePage /> },
     ],
   },

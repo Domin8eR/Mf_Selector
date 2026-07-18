@@ -333,22 +333,23 @@ def test_template_weights_valid():
 # ── 5b. RULE_WEIGHTS_INVALID_TOTAL_HIGH_V1 ────────────────────────────────────
 
 def test_template_weights_invalid_high():
-    """Weights over 100% → RULE_WEIGHTS_INVALID_TOTAL_HIGH_V1 fires."""
+    """Weights over 100% → RULE_WEIGHTS_INVALID_V1 fires (2026-07-18 migration:
+    RULE_WEIGHTS_INVALID_TOTAL_HIGH/LOW/NEGATIVE_V1 consolidated into one)."""
     state = _make_state({"information_ratio_3yr": 0.70, "sharpe_ratio_3yr": 0.60})
     cards = generate_rule_playground_insights(state)
-    card = _get_card(cards, "RULE_WEIGHTS_INVALID_TOTAL_HIGH_V1")
+    card = _get_card(cards, "RULE_WEIGHTS_INVALID_V1")
     assert card is not None
     assert card["severity"] == "warning"
 
 
-# ── 5c. RULE_WEIGHTS_INVALID_NEGATIVE_V1 ─────────────────────────────────────
+# ── 5c. RULE_WEIGHTS_INVALID_V1 (negative weight case) ───────────────────────
 
 def test_template_weights_invalid_negative():
-    """Negative weight → RULE_WEIGHTS_INVALID_NEGATIVE_V1 fires."""
+    """Negative weight → RULE_WEIGHTS_INVALID_V1 fires (consolidated template)."""
     state = _make_state({"information_ratio_3yr": 1.10, "sharpe_ratio_3yr": -0.10})
     cards = generate_rule_playground_insights(state)
     ids = [c["template_id"] for c in cards]
-    assert "RULE_WEIGHTS_INVALID_NEGATIVE_V1" in ids
+    assert "RULE_WEIGHTS_INVALID_V1" in ids
 
 
 # ── 5d. RULE_RECENCY_BIAS_WARNING_V1 ─────────────────────────────────────────
@@ -367,7 +368,9 @@ def test_template_recency_bias_fires():
 
 
 def test_template_recency_bias_ok():
-    """Short-window metrics ≤ 50% → RULE_RECENCY_BIAS_OK_V1 fires (no warning)."""
+    """Short-window metrics <= 50% → no recency-bias card at all (2026-07-18
+    migration: RULE_RECENCY_BIAS_OK_V1 dropped, single-outcome template now —
+    fires only when there's something to warn about)."""
     state = _make_state({
         "ir_slope_6m_proxy": 0.20,
         "information_ratio_3yr": 0.80,
@@ -375,7 +378,6 @@ def test_template_recency_bias_ok():
     cards = generate_rule_playground_insights(state)
     ids = [c["template_id"] for c in cards]
     assert "RULE_RECENCY_BIAS_WARNING_V1" not in ids
-    assert "RULE_RECENCY_BIAS_OK_V1" in ids
 
 
 # ── 5e. RULE_HIGH_CHURN_WARNING_V1 ────────────────────────────────────────────
@@ -471,8 +473,13 @@ def test_at_least_six_distinct_templates_rendered():
     )
     cards = generate_rule_playground_insights(state)
     template_ids = {c["template_id"] for c in cards}
-    assert len(template_ids) >= 6, (
-        f"Expected ≥6 distinct RULE_*_V1 templates; got {sorted(template_ids)}"
+    # 2026-07-18 migration: only 7 RULE_*_V1 templates exist now (down from
+    # 20), and 5 of them are warning-only conditionals with no "OK" / healthy
+    # counterpart card — a healthy state (valid weights, no recency/return/
+    # churn warnings) correctly renders just 2: weights-valid + approval-
+    # readiness. That's fewer cards for a healthy state, not a regression.
+    assert template_ids == {"RULE_WEIGHTS_VALID_V1", "RULE_READY_FOR_APPROVAL_V1"}, (
+        f"Expected exactly the 2 cards for a healthy state; got {sorted(template_ids)}"
     )
 
 

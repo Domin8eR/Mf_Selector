@@ -41,6 +41,16 @@ CREATE TABLE IF NOT EXISTS selfmade_insight_snapshot (
 
 def ensure_table(db: Session) -> None:
     db.execute(text(CREATE_TABLE_SQL))
+    # Compact-card migration (2026-07-18): headline/body_text predate the
+    # compact_text + expanded_bullets + chips format. Added as nullable
+    # columns rather than replacing headline/body_text, so this stays a
+    # additive, reversible schema change.
+    db.execute(text("""
+        ALTER TABLE selfmade_insight_snapshot
+        ADD COLUMN IF NOT EXISTS compact_text TEXT,
+        ADD COLUMN IF NOT EXISTS expanded_bullets JSONB,
+        ADD COLUMN IF NOT EXISTS chips JSONB
+    """))
     db.commit()
 
 
@@ -63,13 +73,15 @@ def store_insights(
             INSERT INTO selfmade_insight_snapshot
                 (page_type, entity_type, entity_id, category_id, comparison_key,
                  evaluation_date, insight_code, template_id, insight_priority,
-                 severity, headline, body_text, facts_json,
-                 source_tables, assumptions, generated_by,
+                 severity, headline, body_text, compact_text, expanded_bullets, chips,
+                 facts_json, source_tables, assumptions, generated_by,
                  prompt_tokens, completion_tokens, expires_at)
             VALUES
                 (:page_type, :entity_type, :entity_id, :category_id, :comparison_key,
                  :evaluation_date, :insight_code, :template_id, :priority,
-                 :severity, :headline, :body_text, CAST(:facts_json AS jsonb),
+                 :severity, :headline, :body_text, :compact_text,
+                 CAST(:expanded_bullets AS jsonb), CAST(:chips AS jsonb),
+                 CAST(:facts_json AS jsonb),
                  :source_tables, :assumptions, :generated_by,
                  :prompt_tokens, 0, :expires_at)
             ON CONFLICT (page_type, entity_id, insight_code, evaluation_date)
@@ -79,6 +91,9 @@ def store_insights(
                 severity = EXCLUDED.severity,
                 headline = EXCLUDED.headline,
                 body_text = EXCLUDED.body_text,
+                compact_text = EXCLUDED.compact_text,
+                expanded_bullets = EXCLUDED.expanded_bullets,
+                chips = EXCLUDED.chips,
                 facts_json = EXCLUDED.facts_json,
                 generated_by = EXCLUDED.generated_by,
                 prompt_tokens = EXCLUDED.prompt_tokens,
@@ -97,6 +112,9 @@ def store_insights(
             "severity": card.severity,
             "headline": card.headline,
             "body_text": card.body_text,
+            "compact_text": card.compact_text,
+            "expanded_bullets": json.dumps(card.expanded_bullets, default=str),
+            "chips": json.dumps(card.chips, default=str),
             "facts_json": json.dumps(card.facts_json, default=str),
             "source_tables": ["selfmade_scheme_ranking", "selfmade_scheme_metrics"],
             "assumptions": [
@@ -123,12 +141,14 @@ def get_cached_insights(
     """Return cached cards if exists and not expired. None = cache miss."""
     rows = db.execute(text("""
         SELECT template_id, insight_code, severity, insight_priority,
-               headline, body_text, facts_json, generated_by, prompt_tokens
+               compact_text, expanded_bullets, chips, facts_json,
+               generated_by, prompt_tokens
         FROM selfmade_insight_snapshot
         WHERE page_type = :page_type
           AND entity_id = :entity_id
           AND evaluation_date = :eval_date
           AND (expires_at IS NULL OR expires_at > NOW())
+          AND compact_text IS NOT NULL
         ORDER BY insight_priority ASC
     """), {
         "page_type": page_type,
@@ -139,19 +159,24 @@ def get_cached_insights(
     if not rows:
         return None
 
+    def _jsonb(v, default):
+        if v is None:
+            return default
+        return v if isinstance(v, (dict, list)) else json.loads(v)
+
     cards = []
     for r in rows:
-        facts = r[6] if isinstance(r[6], dict) else json.loads(r[6]) if r[6] else {}
         cards.append({
             "template_id": r[0],
             "insight_code": r[1],
             "severity": r[2],
             "priority": r[3],
-            "headline": r[4],
-            "body_text": r[5],
-            "facts_json": facts,
-            "generated_by": r[7],
-            "prompt_tokens": r[8] or 0,
+            "compact_text": r[4],
+            "expanded_bullets": _jsonb(r[5], []),
+            "chips": _jsonb(r[6], {}),
+            "facts_json": _jsonb(r[7], {}),
+            "generated_by": r[8],
+            "prompt_tokens": r[9] or 0,
             "follow_up_actions": [],
         })
 

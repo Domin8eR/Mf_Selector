@@ -378,11 +378,21 @@ function ContextPanel({
 export default function ChatPage() {
   const [searchParams] = useSearchParams()
 
-  // Context from Fund Detail / Compare (passed via query string)
+  // Context from Fund Detail / Compare / Rankings / Home / InsightCard (query string)
   const fromPage      = searchParams.get("from") ?? undefined
   const ctxSchemecode = searchParams.get("schemecode")
   const ctxName       = searchParams.get("fund_name")
   const ctxCategory   = searchParams.get("category")
+  const initialQuery  = searchParams.get("q") ?? undefined
+  // Canonical follow-up payload (2026-07-18) from a compact insight card's
+  // follow-up button — takes priority over the looser selected_entities
+  // context below, since it already carries allowed_conclusion for the
+  // LLM constraint.
+  const followUpContext = (() => {
+    const raw = searchParams.get("context")
+    if (!raw) return null
+    try { return JSON.parse(raw) as Record<string, unknown> } catch { return null }
+  })()
 
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput]       = useState("")
@@ -400,8 +410,10 @@ export default function ChatPage() {
 
   const sendMutation = useMutation({
     mutationFn: (message: string) => {
-      const ctx: Record<string, unknown> = {}
-      if (activeFunds.length > 0) {
+      let ctx: Record<string, unknown> = {}
+      if (followUpContext) {
+        ctx = followUpContext
+      } else if (activeFunds.length > 0) {
         ctx.selected_entities = activeFunds.map(f => f.schemecode)
         ctx.primary_schemecode = activeFunds[0].schemecode
         ctx.source_page = fromPage ?? "chat"
@@ -465,6 +477,16 @@ export default function ChatPage() {
     sendMutation.mutate(query)
     setInput("")
   }, [input, sendMutation])
+
+  // Auto-submit a query carried in via ?q= (e.g. Home's command bar) — fire once.
+  const autoSubmitted = useRef(false)
+  useEffect(() => {
+    if (initialQuery && !autoSubmitted.current) {
+      autoSubmitted.current = true
+      submit(initialQuery)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialQuery])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })

@@ -281,49 +281,62 @@ class TestCmpTemplates:
         assert r.status_code == 200
         return r.json()["cards"]
 
-    def test_returns_seven_cards(self, cards):
-        assert len(cards) == 7, f"Expected 7 insight cards, got {len(cards)}"
+    def test_returns_expected_card_count(self, cards):
+        # 2026-07-18 migration: 28 CMP_*_V1 templates consolidated to 8 (sector
+        # overlap and the separate "best overall" slot dropped — category
+        # leader covers "who's ahead"). A 2-fund comparison fires at most
+        # 5 slots: holdings overlap, category leader, 3Y IR, recent
+        # improvement, laggard.
+        assert 1 <= len(cards) <= 5, f"Expected 1-5 insight cards, got {len(cards)}"
 
     def test_all_have_cmp_v1_template_ids(self, cards):
         v1_count = sum(1 for c in cards if c["template_id"].startswith("CMP_") and c["template_id"].endswith("_V1"))
         assert v1_count >= 4, f"Expected ≥4 CMP_*_V1 templates, got {v1_count}: {[c['template_id'] for c in cards]}"
 
     def test_no_forbidden_language(self, cards):
+        """compact_text/expanded_bullets replaced headline/body_text in the
+        2026-07-18 compact-card migration."""
         forbidden = ["recommendation", "buy", "sell", "best fund", "top pick"]
         for c in cards:
-            text = (c["headline"] + " " + c["body_text"]).lower()
+            text = (c["compact_text"] + " " + " ".join(c["expanded_bullets"])).lower()
             for phrase in forbidden:
-                assert phrase not in text, f"Forbidden phrase '{phrase}' in card {c['template_id']}: {c['headline']}"
+                assert phrase not in text, f"Forbidden phrase '{phrase}' in card {c['template_id']}: {c['compact_text']}"
 
     def test_cards_have_required_fields(self, cards):
         for c in cards:
             assert "template_id" in c
             assert "insight_code" in c
             assert "severity" in c
-            assert "headline" in c
-            assert "body_text" in c
+            assert "compact_text" in c
+            assert "expanded_bullets" in c
 
     def test_holdings_overlap_template_fires(self, cards):
         overlap_cards = [c for c in cards if "HOLDINGS_OVERLAP" in c["template_id"]]
         assert len(overlap_cards) >= 1, "Expected at least one HOLDINGS_OVERLAP card"
 
-    def test_sector_overlap_template_fires(self, cards):
+    def test_sector_overlap_dropped(self, cards):
+        """CMP_SECTOR_OVERLAP_*_V1 is not in the new 8-template set — dropped,
+        not rendered as a card anymore."""
         sector_cards = [c for c in cards if "SECTOR_OVERLAP" in c["template_id"]]
-        assert len(sector_cards) >= 1, "Expected at least one SECTOR_OVERLAP card"
+        assert len(sector_cards) == 0
 
-    def test_best_template_fires(self, cards):
-        best_cards = [c for c in cards if c["template_id"].startswith("CMP_BEST")]
-        assert len(best_cards) >= 1, "Expected at least one CMP_BEST* card"
+    def test_clear_or_no_clear_leader_fires(self, cards):
+        """CMP_BEST_CLEAR/NO_CLEAR_WINNER_V1 merged into CMP_CLEAR_LEADER_V1 /
+        CMP_NO_CLEAR_LEADER_V1 — one of the two always fires."""
+        leader_cards = [c for c in cards if c["template_id"] in
+                        ("CMP_CLEAR_LEADER_V1", "CMP_NO_CLEAR_LEADER_V1")]
+        assert len(leader_cards) >= 1, "Expected CMP_CLEAR_LEADER_V1 or CMP_NO_CLEAR_LEADER_V1"
 
     def test_cmp_templates_for_three_funds(self, client):
-        """Layout B (3 funds) must also return 7 cards."""
+        """Layout B (3 funds) uses the MULTI_FUND overlap template and the
+        same 1-5 card range as the 2-fund case."""
         r = client.post(
             "/insights/compare-funds",
             json={"schemecodes": [LC_FUND_A, MC_FUND_B, LC_FUND_C], "evaluation_date": "2026-07-09"},
         )
         assert r.status_code == 200
         cards = r.json()["cards"]
-        assert len(cards) == 7
+        assert 1 <= len(cards) <= 5
 
 
 # ── Layout A structure (2-fund full response) ─────────────────────────────────

@@ -37,14 +37,14 @@ def test_daily_briefing_has_evaluation_date(client: TestClient):
     assert data["evaluation_date"] is not None
 
 
-def test_daily_briefing_summary_card_always_present(client: TestClient):
+def test_daily_briefing_summary_card_dropped(client: TestClient):
+    """AIW_DAILY_BRIEFING_SUMMARY_V1 was intentionally dropped in the
+    2026-07-18 compact-card migration — it's not in the new 3-template AIW
+    set, so it must no longer be rendered."""
     r = client.get("/insights/workspace/daily-briefing")
     data = r.json()
     template_ids = [c["template_id"] for c in data["cards"]]
-    assert "AIW_DAILY_BRIEFING_SUMMARY_V1" in template_ids, (
-        "AIW_DAILY_BRIEFING_SUMMARY_V1 must always be emitted. "
-        f"Got: {template_ids}"
-    )
+    assert "AIW_DAILY_BRIEFING_SUMMARY_V1" not in template_ids
 
 
 def test_daily_briefing_has_v1_templates(client: TestClient):
@@ -93,13 +93,15 @@ def test_daily_briefing_positive_improvers_have_count(client: TestClient):
 
 
 def test_daily_briefing_no_forbidden_language(client: TestClient):
-    """No card headline or body_text may contain forbidden investment-advice language."""
+    """No card compact_text or expanded_bullets may contain forbidden
+    investment-advice language (compact_text/expanded_bullets replaced
+    headline/body_text in the 2026-07-18 compact-card migration)."""
     r = client.get("/insights/workspace/daily-briefing")
     data = r.json()
     for card in data["cards"]:
-        text_blob = (card["headline"] + " " + card["body_text"]).lower()
+        text_blob = (card["compact_text"] + " " + " ".join(card["expanded_bullets"])).lower()
         found = [w for w in FORBIDDEN_WORDS if w in text_blob]
         assert not found, (
             f"Card '{card['template_id']}' contains forbidden words {found}. "
-            f"Headline: {card['headline']}"
+            f"Compact text: {card['compact_text']}"
         )

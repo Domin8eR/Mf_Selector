@@ -244,40 +244,51 @@ class TestFundDetailInsights:
                 assert word not in text, f"Forbidden word '{word}' in card {card['template_id']}"
 
     def test_holdings_template_fires(self, client):
+        """2026-07-18 migration: FUND_HOLDINGS_AVAIL_FULL/STALE/FRESH_V1 were
+        folded into FUND_TOP_HOLDINGS_V1 (as_of_date now lives in its
+        expanded bullets); FUND_HOLDINGS_AVAIL_NONE_V1 and the new <5-holdings
+        fallback are preserved."""
         r = client.get(f"/insights/fund/{SAMPLE_SC}")
         cards = r.json()["cards"]
         holding_ids = {
-            "FUND_HOLDINGS_AVAIL_FULL_V1", "FUND_HOLDINGS_AVAIL_NONE_V1",
-            "FUND_HOLDINGS_DATA_FRESH_V1", "FUND_HOLDINGS_AVAIL_STALE_V1",
+            "FUND_TOP_HOLDINGS_V1", "FUND_TOP_HOLDINGS_LESS_THAN_5_V1",
+            "FUND_HOLDINGS_AVAIL_NONE_V1",
         }
         fired = [c for c in cards if c["template_id"] in holding_ids]
-        assert len(fired) >= 1, "At least one holdings availability template should fire"
+        assert len(fired) >= 1, "At least one holdings template should fire"
 
     def test_rank_tier_template_fires(self, client):
+        """FUND_PERF_RANK_TIER_V1 was folded into the 3-way FUND_3Y_IR_*_V1
+        percentile split and FUND_3Y_PERFORMANCE_STRONG/MIXED_V1's expanded
+        bullets (rank_in_category/total_in_category) — no longer a separate
+        always-firing card."""
         r = client.get(f"/insights/fund/{SAMPLE_SC}")
         ids = [c["template_id"] for c in r.json()["cards"]]
-        assert "FUND_PERF_RANK_TIER_V1" in ids, "FUND_PERF_RANK_TIER_V1 should always fire"
+        ir_ids = {"FUND_3Y_IR_TOP_TIER_V1", "FUND_3Y_IR_ACCEPTABLE_V1",
+                  "FUND_3Y_IR_WEAK_V1", "FUND_3Y_IR_INSUFFICIENT_HISTORY_V1"}
+        assert ir_ids & set(ids), "one of the 3Y IR slot templates should always fire"
 
     def test_trend_template_fires(self, client):
         r = client.get(f"/insights/fund/{SAMPLE_SC}")
         trend_ids = {
-            "FUND_TREND_IMPROVING_V1", "FUND_TREND_DECLINING_V1",
-            "FUND_TREND_STABLE_V1", "FUND_TREND_NEW_V1",
+            "FUND_TREND_IMPROVING_V1", "FUND_TREND_WEAKENING_V1",
+            "FUND_TREND_MIXED_V1", "FUND_TREND_INSUFFICIENT_DATA_V1",
         }
         cards = r.json()["cards"]
         fired = [c for c in cards if c["template_id"] in trend_ids]
-        assert len(fired) >= 1, "At least one trend template should fire"
+        assert len(fired) >= 1, "At least one trend template (or its preserved fallback) should fire"
 
     def test_sectors_template_fires(self, client):
-        """Sectors group (FUND_SECTOR_*_V1) fires for any ranked fund with holdings."""
+        """Sectors group folded FUND_SECTOR_FIN_HEAVY/BALANCED_V1 into
+        FUND_TOP_SECTORS_V1 + FUND_SECTORS_TO_80_V1; fires for any ranked
+        fund with >=3 classified sectors, else the preserved fallback."""
         r = client.get(f"/insights/fund/{SAMPLE_SC}")
         cards = r.json()["cards"]
         sector_ids = {
-            "FUND_SECTOR_CONCENTRATED_V1", "FUND_SECTOR_DIVERSIFIED_V1",
-            "FUND_SECTOR_FIN_HEAVY_V1", "FUND_SECTOR_BALANCED_V1",
+            "FUND_TOP_SECTORS_V1", "FUND_SECTORS_TO_80_V1", "FUND_SECTORS_UNAVAILABLE_V1",
         }
         fired = [c for c in cards if c["template_id"] in sector_ids]
-        assert len(fired) >= 1, "At least one sector template should fire"
+        assert len(fired) >= 1, "At least one sector template (or its preserved fallback) should fire"
 
 
 class TestMultiFundWeightSums:

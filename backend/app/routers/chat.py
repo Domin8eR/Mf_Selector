@@ -129,7 +129,13 @@ def chat_query(
             })
 
     # ── 5. Generate structured response ───────────────────────────────────
-    structured = generate_response(payload.message, intent, tool_results)
+    # A follow-up from a compact insight card sends the canonical payload
+    # (page/insight_code/entity_id/.../allowed_conclusion) as context — pass
+    # it through so the LLM constraint (must not contradict allowed_conclusion)
+    # applies. Plain page-context (selected_entities/primary_schemecode only)
+    # has no allowed_conclusion key, so this is a no-op for those callers.
+    follow_up_payload = payload.context if payload.context and "allowed_conclusion" in payload.context else None
+    structured = generate_response(payload.message, intent, tool_results, follow_up_payload)
 
     answer: str = structured.get("answer", "")
     result_component_type: str = structured.get("result_component_type", "text")

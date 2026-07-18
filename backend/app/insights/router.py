@@ -75,18 +75,11 @@ def workspace_daily_briefing(
 
     categories = ["Equity — Large Cap", "Equity — Mid Cap", "Equity — Small Cap"]
     all_cards: list[InsightCard] = []
-    total_improvers = 0
 
     for cat in categories:
         cached = get_cached_insights(db, "workspace", cat, eval_date)
         if cached:
-            cat_cards = [InsightCard(**c) for c in cached]
-            all_cards.extend(cat_cards)
-            total_improvers += sum(
-                1 for c in cat_cards
-                if c.template_id == "AIW_RANK_IMPROVERS_COUNT_POSITIVE_V1"
-                and c.facts_json.get("count", 0) > 0
-            )
+            all_cards.extend(InsightCard(**c) for c in cached)
             continue
 
         engine = InsightRuleEngine(db)
@@ -95,32 +88,6 @@ def workspace_daily_briefing(
         if cards:
             store_insights(db, "workspace", cat, cat, eval_date, cards)
         all_cards.extend(cards)
-        # Count improvers from this category
-        for t in triggered:
-            if t["template_id"] == "AIW_RANK_IMPROVERS_COUNT_POSITIVE_V1":
-                total_improvers += t["variables"].get("count", 0)
-
-    # ── Append cross-category daily summary (AIW_DAILY_BRIEFING_SUMMARY_V1) ──
-    if total_improvers > 0:
-        summary_detail = (
-            f"Most active category had {total_improvers} qualifying fund(s)"
-        )
-    else:
-        summary_detail = (
-            "No funds crossed the structural improvement threshold today"
-        )
-
-    summary_triggered = [{
-        "template_id": "AIW_DAILY_BRIEFING_SUMMARY_V1",
-        "variables": {
-            "evaluation_date": str(eval_date),
-            "category_count": len(categories),
-            "total_improvers": total_improvers,
-            "summary_detail": summary_detail,
-        },
-    }]
-    summary_cards = _render_triggered(summary_triggered)
-    all_cards.extend(summary_cards)
 
     return InsightResponse(
         cards=all_cards,
@@ -237,26 +204,6 @@ def compare_funds_insights(
     return InsightResponse(
         cards=cards,
         evaluation_date=eval_date,
-        poc_mode=True,
-        assumptions=POC_ASSUMPTIONS,
-        generated_at=datetime.utcnow(),
-    )
-
-
-@router.post("/rule-playground", response_model=InsightResponse)
-def rule_playground_insights(
-    body: RulePlaygroundRequest,
-    db: Session = Depends(get_db),
-):
-    engine = InsightRuleEngine(db)
-    triggered = engine.evaluate_rule_playground_insights(
-        body.weights, body.sandbox_results, body.current_top10,
-    )
-    cards = _render_triggered(triggered)
-
-    return InsightResponse(
-        cards=cards,
-        evaluation_date=date.today(),
         poc_mode=True,
         assumptions=POC_ASSUMPTIONS,
         generated_at=datetime.utcnow(),

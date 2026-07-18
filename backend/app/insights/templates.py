@@ -1,11 +1,25 @@
 """
 Frozen template library for the Insights Engine.
 
-Every insight is rendered from these templates using str.format_map().
-No LLM calls for page insight cards — ENABLE_LLM_PAGE_INSIGHT_POLISH = False.
+Compact-card format (2026-07-18 migration): every insight renders as ONE
+compact sentence (12-22 words, bold only the metric label/decision word)
+plus, on expand, 2-5 bullets. No paragraph blocks. Both are filled from
+frozen strings via str.format_map() — no LLM calls for page insight cards
+(ENABLE_LLM_PAGE_INSIGHT_POLISH = False).
+
+Each template gives 4 alternate compact-sentence phrasings (compact_
+variants) so a fund's card doesn't always show the same wording. Which
+variant renders is picked deterministically per render by
+`variant_index()` below — a hash of entity_id + evaluation_date mod 4 —
+not randomly and not always variant 0.
+
+allowed_conclusion_template / forbidden_conclusions / source_tables feed
+the canonical follow-up LLM context payload (see models.py
+FollowUpPayload) when a user clicks through to Research Chat.
 """
 
 from dataclasses import dataclass, field
+import hashlib
 
 
 @dataclass(frozen=True)
@@ -14,47 +28,77 @@ class InsightTemplate:
     page_type: str
     insight_code: str
     trigger_code: str
-    headline_template: str
-    body_template: str
+    compact_variants: list[str] = field(default_factory=list)
+    expanded_bullets: list[str] = field(default_factory=list)
+    chip_keys: list[str] = field(default_factory=list)
+    follow_up_label: str = "Discuss in Research Chat"
+    allowed_conclusion_template: str = ""
+    forbidden_conclusions: list[str] = field(default_factory=lambda: [
+        "buy recommendation", "sell recommendation",
+        "guaranteed outperformance", "personalized investment advice",
+    ])
+    source_tables: list[str] = field(default_factory=list)
+    # Legacy fields — kept so older (pre-migration) template definitions in
+    # this file that haven't been converted yet still construct without
+    # errors. New templates should not set these.
+    headline_template: str = ""
+    body_template: str = ""
     required_variables: list[str] = field(default_factory=list)
     fallback_template_id: str | None = None
     severity: str = "neutral"
     priority: int = 100
 
 
-# ── Section 6: AI Workspace V1 (AIW_*_V1) ────────────────────────────────────
-# Improver definition (Section 12.6): rank_delta <= -3 AND current_rank <= 30
+def variant_index(variables: dict, n: int = 4) -> int:
+    """
+    Deterministic compact-sentence variant picker: hash(entity_id +
+    evaluation_date) mod n. Same fund + same snapshot date always renders
+    the same variant (reproducible), but different funds/dates spread
+    across all n variants instead of always showing variant 0.
+    """
+    entity_id = str(
+        variables.get("entity_id")
+        or variables.get("schemecode")
+        or variables.get("fund_name")
+        or variables.get("category")
+        or ""
+    )
+    eval_date = str(variables.get("evaluation_date", ""))
+    key = f"{entity_id}|{eval_date}".encode("utf-8")
+    return int(hashlib.sha256(key).hexdigest(), 16) % n
 
-AIW_RANK_IMPROVERS_COUNT_POSITIVE_V1 = InsightTemplate(
-    template_id="AIW_RANK_IMPROVERS_COUNT_POSITIVE_V1",
+
+# ── Section 6: AI Workspace (AIW_*_V1) — compact format, 2026-07-18 ──────────
+# Improver definition: rank_delta <= -3 AND current_rank <= 30
+# AIW_DAILY_BRIEFING_SUMMARY_V1 (old cross-category rollup) dropped — not in
+# the new template set; router.py no longer renders it as a card.
+
+AIW_RANK_IMPROVERS_COUNT_V1 = InsightTemplate(
+    template_id="AIW_RANK_IMPROVERS_COUNT_V1",
     page_type="workspace",
     insight_code="rank_improvers_count",
     trigger_code="count_gt_zero",
-    headline_template="{count} fund(s) show structural improvement in {category}",
-    body_template=(
-        "{count} fund(s) in {category} improved their rank by 3 or more places "
-        "and are currently positioned in the top 30. "
-        "The strongest improver is {top_improver_name} "
-        "(moved from rank {prev_rank} to rank {current_rank})."
+    compact_variants=[
+        "**{category}:** {count} funds improved by more than 2 ranks.",
+        "**{category}:** {count} top-30 funds moved up meaningfully.",
+        "**{category}:** {count} funds gained 3+ ranks in the latest snapshot.",
+        "**{category}:** {count} rank improvers are now inside the top 30.",
+    ],
+    expanded_bullets=[
+        "**Category:** {category}",
+        "**Improver rule:** rank improved by at least 3 places.",
+        "**Top-30 filter:** only funds currently ranked 30 or better are counted.",
+        "**Snapshot:** {evaluation_date}",
+    ],
+    chip_keys=["count", "category", "evaluation_date"],
+    follow_up_label="Open filtered Category Rankings",
+    allowed_conclusion_template=(
+        "{count} fund(s) in {category} improved rank by 3+ places into the top 30 "
+        "as of {evaluation_date}."
     ),
-    required_variables=["count", "category", "top_improver_name", "prev_rank", "current_rank"],
+    source_tables=["selfmade_ranking_snapshot"],
     severity="positive",
     priority=5,
-)
-
-AIW_RANK_IMPROVERS_COUNT_ZERO_V1 = InsightTemplate(
-    template_id="AIW_RANK_IMPROVERS_COUNT_ZERO_V1",
-    page_type="workspace",
-    insight_code="rank_improvers_count",
-    trigger_code="count_zero",
-    headline_template="No structural improvement signals in {category}",
-    body_template=(
-        "No funds in {category} improved their rank by 3 or more places "
-        "into the top 30 in the current evaluation period."
-    ),
-    required_variables=["category"],
-    severity="neutral",
-    priority=15,
 )
 
 AIW_RANK_IMPROVERS_COUNT_SNAPSHOT_MISSING_V1 = InsightTemplate(
@@ -62,44 +106,53 @@ AIW_RANK_IMPROVERS_COUNT_SNAPSHOT_MISSING_V1 = InsightTemplate(
     page_type="workspace",
     insight_code="rank_improvers_count",
     trigger_code="snapshot_missing",
-    headline_template="{category}: Previous ranking snapshot not available",
-    body_template=(
-        "Rank movement data for {category} requires two ranking snapshots. "
-        "Improvement signals will appear after the next ranking run completes."
+    compact_variants=[
+        "**{category}:** previous ranking snapshot not available yet.",
+        "**{category}:** rank movement needs two snapshots to compare.",
+        "**{category}:** improvement signal pending the next ranking run.",
+        "**{category}:** no prior snapshot to measure rank change against.",
+    ],
+    expanded_bullets=[
+        "**Category:** {category}",
+        "**Requirement:** two ranking snapshots are needed to compute rank movement.",
+        "**Next step:** signal appears after the next scheduled ranking run.",
+    ],
+    chip_keys=["category"],
+    follow_up_label="Open Category Rankings",
+    allowed_conclusion_template=(
+        "Rank movement data for {category} is not yet available — only one snapshot exists."
     ),
-    required_variables=["category"],
+    source_tables=["selfmade_ranking_snapshot"],
     severity="neutral",
     priority=20,
 )
 
-AIW_BIGGEST_RANK_IMPROVER_POSITIVE_V1 = InsightTemplate(
-    template_id="AIW_BIGGEST_RANK_IMPROVER_POSITIVE_V1",
+AIW_BIGGEST_RANK_IMPROVER_V1 = InsightTemplate(
+    template_id="AIW_BIGGEST_RANK_IMPROVER_V1",
     page_type="workspace",
     insight_code="biggest_rank_improver",
     trigger_code="improver_found",
-    headline_template="Biggest structural improver: {fund_name}",
-    body_template=(
-        "{fund_name} in {category} moved from rank {prev_rank} to rank {current_rank} "
-        "(improved {delta} places). Sharpe ratio: {sharpe:.4f}."
+    compact_variants=[
+        "**Biggest mover:** {fund_name} improved {rank_improvement_abs} places to rank {current_rank}.",
+        "**Top improver:** {fund_name} moved from {previous_rank} to {current_rank}.",
+        "**Rank jump:** {fund_name} gained {rank_improvement_abs} places and entered the top 30.",
+        "**Largest gain:** {fund_name}, up {rank_improvement_abs} places in {category}.",
+    ],
+    expanded_bullets=[
+        "**Previous rank:** {previous_rank}",
+        "**Current rank:** {current_rank}",
+        "**Rank improvement:** {rank_improvement_abs} places",
+        "**Category:** {category}",
+    ],
+    chip_keys=["current_rank", "rank_improvement_abs", "category"],
+    follow_up_label="Open Fund Detail",
+    allowed_conclusion_template=(
+        "{fund_name} improved from rank {previous_rank} to {current_rank} in {category} "
+        "(up {rank_improvement_abs} places)."
     ),
-    required_variables=["fund_name", "category", "prev_rank", "current_rank", "delta", "sharpe"],
+    source_tables=["selfmade_ranking_snapshot"],
     severity="positive",
     priority=6,
-)
-
-AIW_BIGGEST_RANK_IMPROVER_NONE_V1 = InsightTemplate(
-    template_id="AIW_BIGGEST_RANK_IMPROVER_NONE_V1",
-    page_type="workspace",
-    insight_code="biggest_rank_improver",
-    trigger_code="no_improver",
-    headline_template="No qualifying rank improvers in {category}",
-    body_template=(
-        "No fund in {category} meets the structural improvement threshold "
-        "(rank improved by 3 or more places into the top 30) in this evaluation period."
-    ),
-    required_variables=["category"],
-    severity="neutral",
-    priority=16,
 )
 
 AIW_BIGGEST_RANK_IMPROVER_SNAPSHOT_MISSING_V1 = InsightTemplate(
@@ -107,30 +160,51 @@ AIW_BIGGEST_RANK_IMPROVER_SNAPSHOT_MISSING_V1 = InsightTemplate(
     page_type="workspace",
     insight_code="biggest_rank_improver",
     trigger_code="snapshot_missing",
-    headline_template="{category}: Rank movement data unavailable",
-    body_template=(
-        "Biggest-improver analysis for {category} requires two ranking snapshots. "
-        "This signal will be available after the next scheduled ranking run."
+    compact_variants=[
+        "**{category}:** rank movement data unavailable for a biggest-mover call.",
+        "**{category}:** biggest improver needs two ranking snapshots.",
+        "**{category}:** no prior snapshot to compare rank movement against.",
+        "**{category}:** biggest-mover signal pending next ranking run.",
+    ],
+    expanded_bullets=[
+        "**Category:** {category}",
+        "**Requirement:** two ranking snapshots are needed.",
+        "**Next step:** available after the next scheduled ranking run.",
+    ],
+    chip_keys=["category"],
+    follow_up_label="Open Category Rankings",
+    allowed_conclusion_template=(
+        "Biggest-improver analysis for {category} is not yet available — only one snapshot exists."
     ),
-    required_variables=["category"],
+    source_tables=["selfmade_ranking_snapshot"],
     severity="neutral",
     priority=21,
 )
 
-AIW_DAILY_BRIEFING_SUMMARY_V1 = InsightTemplate(
-    template_id="AIW_DAILY_BRIEFING_SUMMARY_V1",
+AIW_NO_MEANINGFUL_IMPROVERS_V1 = InsightTemplate(
+    template_id="AIW_NO_MEANINGFUL_IMPROVERS_V1",
     page_type="workspace",
-    insight_code="daily_briefing_summary",
-    trigger_code="always",
-    headline_template="Daily briefing: {evaluation_date}",
-    body_template=(
-        "Across {category_count} categories evaluated: "
-        "{total_improvers} structural improvement signal(s) detected. "
-        "{summary_detail}."
+    insight_code="rank_improvers_count",
+    trigger_code="no_improver",
+    compact_variants=[
+        "**{category}:** no top-30 fund improved by 3+ ranks.",
+        "**{category}:** no meaningful top-30 rank improver today.",
+        "**{category}:** rankings were broadly stable in the latest snapshot.",
+        "**{category}:** no new rank-improvement signal crossed the threshold.",
+    ],
+    expanded_bullets=[
+        "**Rule checked:** current rank <= 30 and rank improvement >= 3 places.",
+        "**Result:** no matching fund in the latest snapshot.",
+        "**Next check:** compare the full rank-movement table if needed.",
+    ],
+    chip_keys=["category"],
+    follow_up_label="Open rank movement view",
+    allowed_conclusion_template=(
+        "No fund in {category} met the 3+ place rank-improvement threshold in this snapshot."
     ),
-    required_variables=["evaluation_date", "category_count", "total_improvers", "summary_detail"],
+    source_tables=["selfmade_ranking_snapshot"],
     severity="neutral",
-    priority=25,
+    priority=16,
 )
 
 
@@ -208,217 +282,147 @@ AIW_NO_RANK_DATA = InsightTemplate(
 )
 
 
-# ── Section 7: Category Rankings V1 (CAT_*_V1) ──────────────────────────────
-# Improver definition: rank_delta <= -3 AND current_rank <= 30 (same as AIW)
-# Deteriorating definition: rank_delta >= +3 AND prev_rank <= 20
+# ── Section 7: Category Rankings (CAT_*_V1) — compact format, 2026-07-18 ────
+# CAT_TOP_STRUCTURAL_IMPROVER_PARTIAL_V1, CAT_TOP_RANKED_DETERIORATING_*_V1,
+# CAT_IMPROVEMENT_BREADTH_*_V1 dropped — not in the new template set. The
+# breadth calculation in InsightRuleEngine stays (other logic may still use
+# it); it's just not rendered as a card anymore.
 
-CAT_TOP_STRUCTURAL_IMPROVER_FOUND_V1 = InsightTemplate(
-    template_id="CAT_TOP_STRUCTURAL_IMPROVER_FOUND_V1",
+CAT_TOP_STRUCTURAL_IMPROVER_V1 = InsightTemplate(
+    template_id="CAT_TOP_STRUCTURAL_IMPROVER_V1",
     page_type="category_rankings",
     insight_code="top_structural_improver",
     trigger_code="improver_found",
-    headline_template="{fund_name} leads structural improvement in {category}",
-    body_template=(
-        "{fund_name} improved {abs_delta} places (from rank {prev_rank} to {current_rank}) "
-        "and carries a composite score of {composite_score:.1f}/100. "
-        "IR slope is positive ({ir_slope:+.4f}/month), signalling a sustained "
-        "improvement trajectory."
-    ),
-    required_variables=[
-        "fund_name", "category", "abs_delta", "prev_rank", "current_rank",
-        "composite_score", "ir_slope",
+    compact_variants=[
+        "**Top improver:** {fund_name} gained {rank_improvement_abs} places to rank {current_rank}.",
+        "**Strongest rank move:** {fund_name}, up {rank_improvement_abs} places in {category}.",
+        "**Improvement signal:** {fund_name} moved to rank {current_rank} with positive 3Y IR slope.",
+        "**Rank momentum:** {fund_name} improved {rank_improvement_abs} places over 6 months.",
     ],
+    expanded_bullets=[
+        "**Rank change:** +{rank_improvement_abs} places over 6 months.",
+        "**Current rank:** {current_rank}",
+        "**3Y IR slope:** {ir_slope_3y}",
+        "**Outperformance ratio:** {outperformance_ratio_3y_pct}%",
+    ],
+    chip_keys=["current_rank", "rank_improvement_abs", "ir_slope_3y"],
+    follow_up_label="Open Explain Rank",
+    allowed_conclusion_template=(
+        "{fund_name} improved {rank_improvement_abs} places to rank {current_rank} in {category}, "
+        "with a positive 3Y IR slope of {ir_slope_3y}."
+    ),
+    source_tables=["selfmade_ranking_snapshot", "selfmade_scheme_metrics"],
     severity="positive",
     priority=5,
 )
 
-CAT_TOP_STRUCTURAL_IMPROVER_NONE_V1 = InsightTemplate(
-    template_id="CAT_TOP_STRUCTURAL_IMPROVER_NONE_V1",
+CAT_NO_CLEAR_IMPROVER_V1 = InsightTemplate(
+    template_id="CAT_NO_CLEAR_IMPROVER_V1",
     page_type="category_rankings",
     insight_code="top_structural_improver",
     trigger_code="no_improver",
-    headline_template="No structural improvers detected in {category}",
-    body_template=(
-        "No fund in {category} meets the structural improvement threshold "
-        "(rank improved by ≥3 places into the top 30) in the current evaluation period."
+    compact_variants=[
+        "**No clear improver:** no top-30 fund crossed the improvement threshold.",
+        "**Stable category:** no strong rank-improvement signal in this snapshot.",
+        "**No standout move:** rank changes did not meet the configured threshold.",
+        "**No new signal:** improvement rules did not flag a category leader.",
+    ],
+    expanded_bullets=[
+        "**Rule checked:** rank improvement >= 5 places and positive 3Y IR slope.",
+        "**Result:** no matching fund.",
+        "**Action:** inspect rank history or loosen thresholds if needed.",
+    ],
+    chip_keys=["category"],
+    follow_up_label="Open rank movement chart",
+    allowed_conclusion_template=(
+        "No fund in {category} met the structural-improver threshold (rank improvement >= 5 "
+        "places with positive 3Y IR slope) in this snapshot."
     ),
-    required_variables=["category"],
+    source_tables=["selfmade_ranking_snapshot"],
     severity="neutral",
     priority=20,
 )
 
-CAT_TOP_STRUCTURAL_IMPROVER_PARTIAL_V1 = InsightTemplate(
-    template_id="CAT_TOP_STRUCTURAL_IMPROVER_PARTIAL_V1",
+CAT_TOP_RANKED_WEAKENING_V1 = InsightTemplate(
+    template_id="CAT_TOP_RANKED_WEAKENING_V1",
     page_type="category_rankings",
-    insight_code="top_structural_improver",
-    trigger_code="partial_data",
-    headline_template="{category}: Partial snapshot data — improvement signals limited",
-    body_template=(
-        "Fewer than 2 ranking snapshots are available for {category}. "
-        "Structural improvement signals will be available after the next evaluation run."
-    ),
-    required_variables=["category"],
-    severity="neutral",
-    priority=25,
-)
-
-CAT_TOP_RANKED_DETERIORATING_FOUND_V1 = InsightTemplate(
-    template_id="CAT_TOP_RANKED_DETERIORATING_FOUND_V1",
-    page_type="category_rankings",
-    insight_code="top_ranked_deteriorating",
-    trigger_code="deterioration_found",
-    headline_template="{fund_name} showing signs of deterioration in {category}",
-    body_template=(
-        "{fund_name} dropped {abs_delta} places to rank {current_rank} "
-        "(was rank {prev_rank}). Composite score: {composite_score:.1f}/100. "
-        "Monitor closely over the next evaluation window."
-    ),
-    required_variables=[
-        "fund_name", "category", "abs_delta", "prev_rank", "current_rank",
-        "composite_score",
+    insight_code="top_ranked_weakening",
+    trigger_code="weakening_found",
+    compact_variants=[
+        "**Watchlist:** {fund_name} is top 10, but rank and 3Y IR trend are weakening.",
+        "**Weakening top rank:** {fund_name} remains top 10 but slipped {rank_decline_abs} places.",
+        "**Monitor:** {fund_name} is still highly ranked, but 3Y IR slope is negative.",
+        "**Top-10 caution:** {fund_name} has rank slippage and weaker IR trend.",
     ],
+    expanded_bullets=[
+        "**Current rank:** {current_rank}",
+        "**Rank decline:** {rank_decline_abs} places over 6 months.",
+        "**3Y IR slope:** {ir_slope_3y}",
+        "**Interpretation:** still highly ranked, but trend is weakening.",
+    ],
+    chip_keys=["current_rank", "rank_decline_abs", "ir_slope_3y"],
+    follow_up_label="Open rank history and rolling IR",
+    allowed_conclusion_template=(
+        "{fund_name} remains ranked in the top 10 of {category} but slipped {rank_decline_abs} "
+        "places with a negative 3Y IR slope ({ir_slope_3y}) — a weakening trend worth monitoring."
+    ),
+    source_tables=["selfmade_ranking_snapshot", "selfmade_scheme_metrics"],
     severity="warning",
     priority=8,
 )
 
-CAT_TOP_RANKED_DETERIORATING_NONE_V1 = InsightTemplate(
-    template_id="CAT_TOP_RANKED_DETERIORATING_NONE_V1",
-    page_type="category_rankings",
-    insight_code="top_ranked_deteriorating",
-    trigger_code="no_deterioration",
-    headline_template="No deterioration signals in top-ranked funds in {category}",
-    body_template=(
-        "Previously top-20 funds in {category} maintained or improved their positions "
-        "in the current evaluation period."
-    ),
-    required_variables=["category"],
-    severity="positive",
-    priority=18,
-)
-
-CAT_NEW_TOP_30_ENTRANTS_POSITIVE_V1 = InsightTemplate(
-    template_id="CAT_NEW_TOP_30_ENTRANTS_POSITIVE_V1",
+CAT_NEW_TOP_30_ENTRANTS_V1 = InsightTemplate(
+    template_id="CAT_NEW_TOP_30_ENTRANTS_V1",
     page_type="category_rankings",
     insight_code="new_top30_entrants",
     trigger_code="entrants_found",
-    headline_template="{entrant_count} new entrant(s) in the top 30 for {category}",
-    body_template=(
-        "{entrant_names} entered the top 30 in {category} this period. "
-        "These funds were previously ranked at positions {prev_ranks}. "
-        "They may warrant closer research-grade analysis."
-    ),
-    required_variables=[
-        "entrant_count", "category", "entrant_names", "prev_ranks",
+    compact_variants=[
+        "**New entrants:** {count} funds moved into the top 30.",
+        "**Top-30 changes:** {count} funds entered the leading group.",
+        "**Fresh candidates:** {count} funds crossed into the top 30.",
+        "**Rank upgrade:** {count} funds are newly inside the top 30.",
     ],
+    expanded_bullets=[
+        "**Rule:** previous rank > 30 and current rank <= 30.",
+        "**Count:** {count} funds.",
+        "**Category:** {category}",
+        "**Action:** review entrants before comparing them.",
+    ],
+    chip_keys=["count", "category"],
+    follow_up_label="Open filtered new-entrants table",
+    allowed_conclusion_template=(
+        "{count} fund(s) newly entered the top 30 of {category} (previously ranked below 30)."
+    ),
+    source_tables=["selfmade_ranking_snapshot"],
     severity="neutral",
     priority=12,
 )
 
-CAT_NEW_TOP_30_ENTRANTS_ZERO_V1 = InsightTemplate(
-    template_id="CAT_NEW_TOP_30_ENTRANTS_ZERO_V1",
-    page_type="category_rankings",
-    insight_code="new_top30_entrants",
-    trigger_code="no_entrants",
-    headline_template="No new entrants in the top 30 for {category}",
-    body_template=(
-        "The top 30 composition in {category} remained stable "
-        "relative to the previous evaluation snapshot."
-    ),
-    required_variables=["category"],
-    severity="neutral",
-    priority=22,
-)
-
-CAT_TIGHT_SCORE_CLUSTER_TRUE_V1 = InsightTemplate(
-    template_id="CAT_TIGHT_SCORE_CLUSTER_TRUE_V1",
+CAT_TIGHT_SCORE_CLUSTER_V1 = InsightTemplate(
+    template_id="CAT_TIGHT_SCORE_CLUSTER_V1",
     page_type="category_rankings",
     insight_code="tight_score_cluster",
     trigger_code="cluster_detected",
-    headline_template="Tight score cluster at the top of {category}",
-    body_template=(
-        "The score gap between rank 1 ({rank1_name}, {rank1_score:.1f}) and "
-        "rank 10 ({rank10_name}, {rank10_score:.1f}) is only {score_gap:.1f} points. "
-        "Small metric changes could significantly reshuffle the top positions."
-    ),
-    required_variables=[
-        "category", "rank1_name", "rank1_score", "rank10_name",
-        "rank10_score", "score_gap",
+    compact_variants=[
+        "**Tight cluster:** top 10 funds differ by only {score_gap_rank_1_to_10} score points.",
+        "**Close race:** rank 1-10 are separated by {score_gap_rank_1_to_10} points.",
+        "**Ranking caution:** top scores are tightly packed in {category}.",
+        "**Small score gap:** exact order among top funds should not be overread.",
     ],
+    expanded_bullets=[
+        "**Score gap:** {score_gap_rank_1_to_10} points between rank 1 and rank 10.",
+        "**Interpretation:** top funds are closely matched.",
+        "**Action:** compare metric drivers before selecting a research candidate.",
+    ],
+    chip_keys=["score_gap_rank_1_to_10", "category"],
+    follow_up_label="Open top-10 comparison",
+    allowed_conclusion_template=(
+        "The top 10 funds in {category} are tightly clustered — only {score_gap_rank_1_to_10} "
+        "score points separate rank 1 from rank 10, so exact order should not be overread."
+    ),
+    source_tables=["selfmade_ranking_snapshot"],
     severity="neutral",
     priority=15,
-)
-
-CAT_TIGHT_SCORE_CLUSTER_FALSE_V1 = InsightTemplate(
-    template_id="CAT_TIGHT_SCORE_CLUSTER_FALSE_V1",
-    page_type="category_rankings",
-    insight_code="tight_score_cluster",
-    trigger_code="clear_separation",
-    headline_template="Clear score separation in {category} top 10",
-    body_template=(
-        "The score gap between rank 1 ({rank1_name}, {rank1_score:.1f}) and "
-        "rank 10 ({rank10_name}, {rank10_score:.1f}) is {score_gap:.1f} points, "
-        "indicating clear separation between the leaders."
-    ),
-    required_variables=[
-        "category", "rank1_name", "rank1_score", "rank10_name",
-        "rank10_score", "score_gap",
-    ],
-    severity="neutral",
-    priority=18,
-)
-
-CAT_IMPROVEMENT_BREADTH_POSITIVE_V1 = InsightTemplate(
-    template_id="CAT_IMPROVEMENT_BREADTH_POSITIVE_V1",
-    page_type="category_rankings",
-    insight_code="improvement_breadth",
-    trigger_code="majority_improving",
-    headline_template="{improving_pct:.0f}% of funds improved in {category}",
-    body_template=(
-        "{improving_count} of {total_count} ranked funds in {category} "
-        "improved their composite score relative to the previous snapshot "
-        "({improving_pct:.0f}%). Broad improvement may reflect category-wide tailwinds."
-    ),
-    required_variables=[
-        "category", "improving_count", "total_count", "improving_pct",
-    ],
-    severity="positive",
-    priority=14,
-)
-
-CAT_IMPROVEMENT_BREADTH_NEGATIVE_V1 = InsightTemplate(
-    template_id="CAT_IMPROVEMENT_BREADTH_NEGATIVE_V1",
-    page_type="category_rankings",
-    insight_code="improvement_breadth",
-    trigger_code="majority_deteriorating",
-    headline_template="{deteriorating_pct:.0f}% of funds deteriorated in {category}",
-    body_template=(
-        "{deteriorating_count} of {total_count} ranked funds in {category} "
-        "saw their composite score decline relative to the previous snapshot "
-        "({deteriorating_pct:.0f}%). Broad deterioration may indicate category-level headwinds."
-    ),
-    required_variables=[
-        "category", "deteriorating_count", "total_count", "deteriorating_pct",
-    ],
-    severity="warning",
-    priority=10,
-)
-
-CAT_IMPROVEMENT_BREADTH_BALANCED_V1 = InsightTemplate(
-    template_id="CAT_IMPROVEMENT_BREADTH_BALANCED_V1",
-    page_type="category_rankings",
-    insight_code="improvement_breadth",
-    trigger_code="balanced_breadth",
-    headline_template="Mixed signals in {category}: improvement breadth balanced",
-    body_template=(
-        "{improving_count} funds improved and {deteriorating_count} deteriorated "
-        "in {category} this period (out of {total_count} total). "
-        "No clear directional trend in the category."
-    ),
-    required_variables=[
-        "category", "improving_count", "deteriorating_count", "total_count",
-    ],
-    severity="neutral",
-    priority=16,
 )
 
 
@@ -854,314 +858,173 @@ RULE_SCORE_LEADER_GAP = InsightTemplate(
 )
 
 
-# ── Section 10b: Rule Playground V1 (20 specific RULE_*_V1 templates) ────────
-# These replace/supplement the generic RULE_* templates above.
-# Language rule: no "recommendation", "buy", "sell", "best fund", "top pick".
+# ── Section 10: Rule Playground (RULE_*_V1) — compact format, 2026-07-18 ────
+# RULE_FORMULA_VALID/INVALID_SYNTAX/VARIABLE/FUNCTION_V1 dropped — formula
+# validation renders directly via the Formula Validation checklist UI, not
+# as an insight card. RULE_CATEGORY_BIAS_*_V1 and RULE_TOP_SANDBOX_
+# BENEFICIARY/LOSER_V1 dropped as cards too — the calculations stay cheap
+# and available (SandboxRunSummary still carries beneficiary/loser fields),
+# surfaced via the sandbox-vs-default results table's movement arrows
+# instead of a separate card.
 
 RULE_WEIGHTS_VALID_V1 = InsightTemplate(
     template_id="RULE_WEIGHTS_VALID_V1",
     page_type="rule_playground",
     insight_code="weights_valid",
     trigger_code="weights_sum_eq_100",
-    headline_template="Rule weights are valid — total {total_pct:.1f}%",
-    body_template=(
-        "All {component_count} rule component(s) carry non-negative weights that sum to "
-        "{total_pct:.1f}%. The rule engine will use these weights as entered."
-    ),
-    required_variables=["total_pct", "component_count"],
+    compact_variants=[
+        "**Rule status:** valid. Weights add to 100%.",
+        "**Weights:** valid at 100%.",
+        "**Rule check:** weights are balanced and valid.",
+        "**Ready check:** weights pass validation.",
+    ],
+    expanded_bullets=[
+        "**Total weight:** {total_weight_pct}%",
+        "**Negative weights:** none",
+        "**Duplicate metrics:** {duplicate_metric_status}",
+        "**Next step:** run sandbox impact.",
+    ],
+    chip_keys=["total_weight_pct"],
+    follow_up_label="Run sandbox",
+    allowed_conclusion_template="The current rule weights sum to {total_weight_pct}% and are valid.",
+    source_tables=[],
     severity="positive",
     priority=1,
 )
 
-RULE_WEIGHTS_INVALID_TOTAL_HIGH_V1 = InsightTemplate(
-    template_id="RULE_WEIGHTS_INVALID_TOTAL_HIGH_V1",
+RULE_WEIGHTS_INVALID_V1 = InsightTemplate(
+    template_id="RULE_WEIGHTS_INVALID_V1",
     page_type="rule_playground",
-    insight_code="weights_invalid_high",
-    trigger_code="weights_sum_gt_100",
-    headline_template="Rule weights exceed 100% — current total {total_pct:.1f}%",
-    body_template=(
-        "The {component_count} component weights sum to {total_pct:.1f}%, which exceeds 100%. "
-        "Reduce the weights by {excess_pct:.1f} percentage point(s) before running the sandbox "
-        "or submitting for approval."
+    insight_code="weights_valid",
+    trigger_code="weights_invalid",
+    compact_variants=[
+        "**Rule status:** invalid. Weights total {total_weight_pct}%.",
+        "**Fix needed:** weights must add to 100%, not {total_weight_pct}%.",
+        "**Weight error:** adjust by {weight_gap_pct} percentage points.",
+        "**Not ready:** weight validation failed.",
+    ],
+    expanded_bullets=[
+        "**Current total:** {total_weight_pct}%",
+        "**Required total:** 100%",
+        "**Gap:** {weight_gap_pct} percentage points",
+        "**Action:** edit weights before sandbox submission.",
+    ],
+    chip_keys=["total_weight_pct", "weight_gap_pct"],
+    follow_up_label="Focus weight editor",
+    allowed_conclusion_template=(
+        "The current rule weights total {total_weight_pct}%, not the required 100% "
+        "(gap of {weight_gap_pct} percentage points)."
     ),
-    required_variables=["total_pct", "component_count", "excess_pct"],
+    source_tables=[],
     severity="warning",
     priority=1,
-)
-
-RULE_WEIGHTS_INVALID_TOTAL_LOW_V1 = InsightTemplate(
-    template_id="RULE_WEIGHTS_INVALID_TOTAL_LOW_V1",
-    page_type="rule_playground",
-    insight_code="weights_invalid_low",
-    trigger_code="weights_sum_lt_100",
-    headline_template="Rule weights are below 100% — current total {total_pct:.1f}%",
-    body_template=(
-        "The {component_count} component weights sum to {total_pct:.1f}%, which is "
-        "{shortfall_pct:.1f} percentage point(s) short of the required 100%. "
-        "Increase one or more weights before running the sandbox."
-    ),
-    required_variables=["total_pct", "component_count", "shortfall_pct"],
-    severity="warning",
-    priority=1,
-)
-
-RULE_WEIGHTS_INVALID_NEGATIVE_V1 = InsightTemplate(
-    template_id="RULE_WEIGHTS_INVALID_NEGATIVE_V1",
-    page_type="rule_playground",
-    insight_code="weights_invalid_negative",
-    trigger_code="any_weight_lt_0",
-    headline_template="Negative weights are not allowed",
-    body_template=(
-        "Component '{offending_component}' has a negative weight ({offending_weight:.1f}%). "
-        "All weights must be ≥ 0. Set this component to 0 to exclude it from scoring."
-    ),
-    required_variables=["offending_component", "offending_weight"],
-    severity="warning",
-    priority=1,
-)
-
-RULE_FORMULA_VALID_V1 = InsightTemplate(
-    template_id="RULE_FORMULA_VALID_V1",
-    page_type="rule_playground",
-    insight_code="formula_valid",
-    trigger_code="formula_passes_parse",
-    headline_template="Formula is valid — {formula_component}",
-    body_template=(
-        "The formula expression for '{formula_component}' parsed successfully. "
-        "Referenced variables: {parsed_variables}. "
-        "Sample evaluation: {sample_result}."
-    ),
-    required_variables=["formula_component", "parsed_variables", "sample_result"],
-    severity="positive",
-    priority=2,
-)
-
-RULE_FORMULA_INVALID_SYNTAX_V1 = InsightTemplate(
-    template_id="RULE_FORMULA_INVALID_SYNTAX_V1",
-    page_type="rule_playground",
-    insight_code="formula_invalid_syntax",
-    trigger_code="formula_syntax_error",
-    headline_template="Formula syntax error — {formula_component}",
-    body_template=(
-        "The formula expression for '{formula_component}' could not be parsed. "
-        "Error: {parse_error}. "
-        "Check for mismatched parentheses, missing operators, or invalid characters."
-    ),
-    required_variables=["formula_component", "parse_error"],
-    severity="warning",
-    priority=2,
-)
-
-RULE_FORMULA_INVALID_VARIABLE_V1 = InsightTemplate(
-    template_id="RULE_FORMULA_INVALID_VARIABLE_V1",
-    page_type="rule_playground",
-    insight_code="formula_invalid_variable",
-    trigger_code="formula_unknown_variable",
-    headline_template="Formula uses unavailable variables — {formula_component}",
-    body_template=(
-        "The formula for '{formula_component}' references variable(s) not in the "
-        "metric vocabulary: {unknown_variables}. "
-        "Available variables include: {available_sample}."
-    ),
-    required_variables=["formula_component", "unknown_variables", "available_sample"],
-    severity="warning",
-    priority=2,
-)
-
-RULE_FORMULA_INVALID_FUNCTION_V1 = InsightTemplate(
-    template_id="RULE_FORMULA_INVALID_FUNCTION_V1",
-    page_type="rule_playground",
-    insight_code="formula_invalid_function",
-    trigger_code="formula_unsupported_function",
-    headline_template="Formula uses unsupported functions — {formula_component}",
-    body_template=(
-        "The formula for '{formula_component}' calls function(s) not on the allow-list: "
-        "{unsupported_functions}. "
-        "Permitted functions: AVG, SLOPE, PERCENTILE_RANK, ZSCORE."
-    ),
-    required_variables=["formula_component", "unsupported_functions"],
-    severity="warning",
-    priority=2,
 )
 
 RULE_RECENCY_BIAS_WARNING_V1 = InsightTemplate(
     template_id="RULE_RECENCY_BIAS_WARNING_V1",
     page_type="rule_playground",
-    insight_code="recency_bias_warning",
+    insight_code="recency_bias",
     trigger_code="short_window_weight_gt_50",
-    headline_template="Recency-bias warning — short-window weight {short_window_pct:.0f}%",
-    body_template=(
-        "Short-window metrics (window ≤ 12 months: {short_window_components}) carry "
-        "{short_window_pct:.0f}% of total weight, exceeding the 50% threshold. "
-        "This may cause the ranked list to over-react to recent market moves. "
-        "Consider redistributing weight to longer-window metrics."
+    compact_variants=[
+        "**Recency bias:** {short_window_weight_pct}% weight is on 1Y or shorter metrics.",
+        "**Short-window tilt:** {short_window_weight_pct}% of the rule uses recent metrics.",
+        "**Bias check:** high dependence on short-term metrics.",
+        "**Rule caution:** recent performance may dominate the ranking.",
+    ],
+    expanded_bullets=[
+        "**Short-window weight:** {short_window_weight_pct}%",
+        "**Threshold:** 50%",
+        "**Risk:** rankings may overreact to recent performance.",
+        "**Action:** add 3Y or 5Y stabilizers if desired.",
+    ],
+    chip_keys=["short_window_weight_pct"],
+    follow_up_label="Suggest alternative weight mix",
+    allowed_conclusion_template=(
+        "{short_window_weight_pct}% of this rule's weight is on short-window (<=1Y) metrics, "
+        "above the 50% recency-bias threshold."
     ),
-    required_variables=["short_window_pct", "short_window_components"],
+    source_tables=[],
     severity="warning",
-    priority=8,
-)
-
-RULE_RECENCY_BIAS_OK_V1 = InsightTemplate(
-    template_id="RULE_RECENCY_BIAS_OK_V1",
-    page_type="rule_playground",
-    insight_code="recency_bias_ok",
-    trigger_code="short_window_weight_le_50",
-    headline_template="Recency weight is within limit — {short_window_pct:.0f}%",
-    body_template=(
-        "Short-window metrics carry {short_window_pct:.0f}% of total weight (limit: 50%). "
-        "The rule balances near-term signals with longer-window structural metrics."
-    ),
-    required_variables=["short_window_pct"],
-    severity="positive",
     priority=8,
 )
 
 RULE_RETURN_HEAVY_WARNING_V1 = InsightTemplate(
     template_id="RULE_RETURN_HEAVY_WARNING_V1",
     page_type="rule_playground",
-    insight_code="return_heavy_warning",
+    insight_code="return_heavy",
     trigger_code="return_weight_gt_50_and_risk_adj_lt_30",
-    headline_template="Rule is return-heavy — return weight {return_pct:.0f}%, risk-adjusted {risk_adj_pct:.0f}%",
-    body_template=(
-        "Absolute-return metrics carry {return_pct:.0f}% of total weight while "
-        "risk-adjusted metrics (IR, Sharpe, Sortino) carry only {risk_adj_pct:.0f}%. "
-        "This may rank funds that generated returns through higher risk rather than "
-        "structural quality. Consider increasing risk-adjusted metric weights."
+    compact_variants=[
+        "**Return-heavy:** {absolute_return_weight_pct}% weight is on return metrics.",
+        "**Risk balance:** rule is tilted toward raw returns.",
+        "**Rule caution:** risk-adjusted metrics have low weight.",
+        "**Metric mix:** returns dominate the rule design.",
+    ],
+    expanded_bullets=[
+        "**Return weight:** {absolute_return_weight_pct}%",
+        "**Risk-adjusted weight:** {risk_adjusted_weight_pct}%",
+        "**Concern:** rankings may reward volatile winners.",
+        "**Action:** consider IR, Sortino or downside capture weight.",
+    ],
+    chip_keys=["absolute_return_weight_pct", "risk_adjusted_weight_pct"],
+    follow_up_label="Open metric mix editor",
+    allowed_conclusion_template=(
+        "This rule weights absolute return at {absolute_return_weight_pct}% versus only "
+        "{risk_adjusted_weight_pct}% on risk-adjusted metrics — return-heavy design."
     ),
-    required_variables=["return_pct", "risk_adj_pct"],
+    source_tables=[],
     severity="warning",
-    priority=10,
-)
-
-RULE_RETURN_BALANCED_V1 = InsightTemplate(
-    template_id="RULE_RETURN_BALANCED_V1",
-    page_type="rule_playground",
-    insight_code="return_balanced",
-    trigger_code="return_and_risk_adj_balanced",
-    headline_template="Return and risk-adjusted weights are balanced",
-    body_template=(
-        "Return metrics carry {return_pct:.0f}% and risk-adjusted metrics carry "
-        "{risk_adj_pct:.0f}% of total weight. The rule blends performance and "
-        "structural quality signals adequately."
-    ),
-    required_variables=["return_pct", "risk_adj_pct"],
-    severity="positive",
     priority=10,
 )
 
 RULE_HIGH_CHURN_WARNING_V1 = InsightTemplate(
     template_id="RULE_HIGH_CHURN_WARNING_V1",
     page_type="rule_playground",
-    insight_code="high_churn_warning",
+    insight_code="high_churn",
     trigger_code="top10_turnover_gt_40",
-    headline_template="High churn warning — {turnover_pct:.0f}% top-10 turnover",
-    body_template=(
-        "{turnover_pct:.0f}% of the top-10 positions differ between the sandbox and "
-        "the current default ranking (threshold: 40%). "
-        "Funds entering top-10 under sandbox: {entering_funds}. "
-        "Funds leaving: {leaving_funds}. "
-        "High churn may signal excessive sensitivity to the changed weights."
-    ),
-    required_variables=["turnover_pct", "entering_funds", "leaving_funds"],
-    severity="warning",
-    priority=12,
-)
-
-RULE_CHURN_NORMAL_V1 = InsightTemplate(
-    template_id="RULE_CHURN_NORMAL_V1",
-    page_type="rule_playground",
-    insight_code="churn_normal",
-    trigger_code="top10_turnover_le_40",
-    headline_template="Churn is within limit — {turnover_pct:.0f}% top-10 turnover",
-    body_template=(
-        "Only {turnover_pct:.0f}% of the top-10 positions changed relative to the "
-        "current default ranking (limit: 40%). The sandbox weights produce stable "
-        "structural rankings."
-    ),
-    required_variables=["turnover_pct"],
-    severity="positive",
-    priority=12,
-)
-
-RULE_CATEGORY_BIAS_WARNING_V1 = InsightTemplate(
-    template_id="RULE_CATEGORY_BIAS_WARNING_V1",
-    page_type="rule_playground",
-    insight_code="category_bias_warning",
-    trigger_code="rank_shift_magnitude_2x_across_categories",
-    headline_template="Category-bias warning — rank shift {max_shift:.1f}× vs {min_shift:.1f}×",
-    body_template=(
-        "The sandbox weights produce sharply different rank-movement magnitudes across "
-        "fund categories: {high_churn_category} shows average shift of {max_shift:.1f} "
-        "places, while {low_churn_category} shows only {min_shift:.1f} places. "
-        "The rule may systematically favour or penalise certain categories."
-    ),
-    required_variables=[
-        "high_churn_category", "max_shift", "low_churn_category", "min_shift",
+    compact_variants=[
+        "**Churn warning:** {top10_turnover_count} of top 10 funds change.",
+        "**High turnover:** sandbox replaces {top10_turnover_count} top-10 funds.",
+        "**Rule impact:** top-10 list changes materially.",
+        "**Stability check:** sandbox rule creates high rank churn.",
     ],
+    expanded_bullets=[
+        "**Top-10 turnover:** {top10_turnover_pct}%",
+        "**Funds replaced:** {top10_turnover_count}",
+        "**Average rank change:** {average_rank_change}",
+        "**Action:** review whether churn is acceptable.",
+    ],
+    chip_keys=["top10_turnover_pct", "top10_turnover_count"],
+    follow_up_label="Open sandbox vs default comparison",
+    allowed_conclusion_template=(
+        "This sandbox rule replaces {top10_turnover_count} of the top 10 funds "
+        "({top10_turnover_pct}% turnover) versus the current default ranking."
+    ),
+    source_tables=[],
     severity="warning",
-    priority=15,
-)
-
-RULE_CATEGORY_BIAS_NONE_V1 = InsightTemplate(
-    template_id="RULE_CATEGORY_BIAS_NONE_V1",
-    page_type="rule_playground",
-    insight_code="category_bias_none",
-    trigger_code="rank_shift_magnitude_within_2x",
-    headline_template="No major category bias flagged",
-    body_template=(
-        "Rank-movement magnitude is broadly consistent across the sampled categories "
-        "(max/min ratio {shift_ratio:.1f}×). The sandbox weights do not appear to "
-        "systematically favour one category over another."
-    ),
-    required_variables=["shift_ratio"],
-    severity="positive",
-    priority=15,
-)
-
-RULE_TOP_SANDBOX_BENEFICIARY_V1 = InsightTemplate(
-    template_id="RULE_TOP_SANDBOX_BENEFICIARY_V1",
-    page_type="rule_playground",
-    insight_code="top_sandbox_beneficiary",
-    trigger_code="largest_positive_rank_change",
-    headline_template="Biggest sandbox beneficiary — {fund_name} (+{places} places)",
-    body_template=(
-        "{fund_name} moves from rank {default_rank} (default) to rank {sandbox_rank} "
-        "(sandbox), gaining {places} places. "
-        "This fund benefits most from the proposed weight changes."
-    ),
-    required_variables=["fund_name", "places", "default_rank", "sandbox_rank"],
-    severity="neutral",
-    priority=17,
-)
-
-RULE_TOP_SANDBOX_LOSER_V1 = InsightTemplate(
-    template_id="RULE_TOP_SANDBOX_LOSER_V1",
-    page_type="rule_playground",
-    insight_code="top_sandbox_loser",
-    trigger_code="largest_negative_rank_change",
-    headline_template="Biggest sandbox decliner — {fund_name} ({places} places)",
-    body_template=(
-        "{fund_name} moves from rank {default_rank} (default) to rank {sandbox_rank} "
-        "(sandbox), declining {places} places. "
-        "This fund is most affected by the proposed weight changes."
-    ),
-    required_variables=["fund_name", "places", "default_rank", "sandbox_rank"],
-    severity="neutral",
-    priority=17,
+    priority=12,
 )
 
 RULE_READY_FOR_APPROVAL_V1 = InsightTemplate(
     template_id="RULE_READY_FOR_APPROVAL_V1",
     page_type="rule_playground",
-    insight_code="ready_for_approval",
+    insight_code="approval_readiness",
     trigger_code="all_checks_pass",
-    headline_template="Ready for approval submission",
-    body_template=(
-        "All pre-submission checks passed: weights sum to 100%, all formulas are valid, "
-        "the sandbox run is complete ({fund_count} funds evaluated), and a rationale "
-        "text is present. The rule version can be submitted for team approval."
-    ),
-    required_variables=["fund_count"],
+    compact_variants=[
+        "**Approval status:** ready to submit.",
+        "**Rule status:** ready for approval workflow.",
+        "**Ready:** validations passed and sandbox is complete.",
+        "**Submit-ready:** rule can move to approval review.",
+    ],
+    expanded_bullets=[
+        "**Weights:** valid",
+        "**Formula:** valid",
+        "**Sandbox:** complete",
+        "**Approval note:** present",
+    ],
+    chip_keys=[],
+    follow_up_label="Submit for approval",
+    allowed_conclusion_template="This rule version has passed all pre-submission checks and is ready for approval.",
+    source_tables=[],
     severity="positive",
     priority=0,
 )
@@ -1169,14 +1032,27 @@ RULE_READY_FOR_APPROVAL_V1 = InsightTemplate(
 RULE_NOT_READY_FOR_APPROVAL_V1 = InsightTemplate(
     template_id="RULE_NOT_READY_FOR_APPROVAL_V1",
     page_type="rule_playground",
-    insight_code="not_ready_for_approval",
+    insight_code="approval_readiness",
     trigger_code="any_check_fails",
-    headline_template="Not ready for approval — {blocking_check_count} issue(s) to resolve",
-    body_template=(
-        "The following check(s) must pass before submission: {blocking_checks}. "
-        "Address each issue and re-run the sandbox before submitting."
+    compact_variants=[
+        "**Not ready:** {blocking_issue_count} issue(s) must be fixed.",
+        "**Approval blocked:** resolve {blocking_issue_count} issue(s) first.",
+        "**Rule status:** not ready for approval.",
+        "**Fix required:** validation or sandbox checks are incomplete.",
+    ],
+    expanded_bullets=[
+        "**Blocking issues:** {blocking_issue_count}",
+        "**Weight status:** {weight_status}",
+        "**Formula status:** {formula_status}",
+        "**Sandbox status:** {sandbox_status}",
+    ],
+    chip_keys=["blocking_issue_count"],
+    follow_up_label="Open blocking issue list",
+    allowed_conclusion_template=(
+        "This rule version is not ready for approval — {blocking_issue_count} blocking "
+        "issue(s) remain."
     ),
-    required_variables=["blocking_check_count", "blocking_checks"],
+    source_tables=[],
     severity="warning",
     priority=0,
 )
@@ -1241,850 +1117,716 @@ CHAT_EXPLAIN_TREND = InsightTemplate(
 )
 
 
-# ── Section 12.6: Fund Detail V1 (FUND_*_V1) ────────────────────────────────
-# Group 1: Holdings availability
+# ── Section 12.6: Fund Detail (FUND_*_V1) — compact format, 2026-07-18 ──────
+# FUND_CONC_*_V1/FUND_CONC_TOP_NAMES_V1 → folded into FUND_TOP_HOLDINGS_V1.
+# FUND_SECTOR_FIN_HEAVY/BALANCED_V1 → folded into FUND_TOP_SECTORS_V1 /
+# FUND_SECTORS_TO_80_V1. FUND_PERF_ALPHA_*/RANK_TIER_V1 → folded into
+# FUND_3Y_PERFORMANCE_STRONG/MIXED_V1's expanded bullets. Data-freshness
+# (old FRESH/STALE cards) folded into FUND_TOP_HOLDINGS_V1's as_of_date bullet
+# per the POC rule — no standalone data-confidence card.
+#
+# Preserved fallbacks (existing trigger logic, new compact+expandable format):
+# zero holdings, zero/fewer-than-3 sectors, insufficient 3Y history,
+# insufficient trend data. A fund with missing data must never show nothing.
 
-FUND_HOLDINGS_AVAIL_FULL_V1 = InsightTemplate(
-    template_id="FUND_HOLDINGS_AVAIL_FULL_V1",
-    page_type="fund_detail",
-    insight_code="holdings_avail_full",
-    trigger_code="full_data",
-    headline_template="Portfolio holdings: {holding_count} positions as of {as_of_date}",
-    body_template=(
-        "Full holdings data is available for this fund with {holding_count} positions "
-        "as of {as_of_date}. The portfolio is {weight_coverage:.1f}% accounted for "
-        "by named holdings; the remainder represents cash or unclassified positions."
-    ),
-    required_variables=["holding_count", "as_of_date", "weight_coverage"],
-    severity="positive",
-    priority=10,
-)
+# — Group 1: Holdings —
 
 FUND_HOLDINGS_AVAIL_NONE_V1 = InsightTemplate(
     template_id="FUND_HOLDINGS_AVAIL_NONE_V1",
     page_type="fund_detail",
     insight_code="holdings_avail_none",
     trigger_code="no_data",
-    headline_template="Holdings data not available for this fund",
-    body_template=(
-        "Portfolio holdings data has not been ingested for this fund yet. "
-        "Concentration, sector, and overlap analysis will be available after the next "
-        "data refresh cycle."
-    ),
-    required_variables=[],
+    compact_variants=[
+        "**Holdings:** not yet available for this fund.",
+        "**Portfolio data:** not ingested for this fund yet.",
+        "**Holdings status:** unavailable pending the next data refresh.",
+        "**No holdings data:** concentration and sector views are unavailable.",
+    ],
+    expanded_bullets=[
+        "**Status:** portfolio holdings have not been ingested for this fund.",
+        "**Affected views:** concentration, sector, and overlap analysis.",
+        "**Next step:** check back after the next data refresh cycle.",
+    ],
+    chip_keys=[],
+    follow_up_label="Check Data Quality page",
+    allowed_conclusion_template="Portfolio holdings data is not yet available for this fund.",
+    source_tables=["selfmade_portfolio_holding"],
     severity="neutral",
     priority=30,
 )
 
-FUND_HOLDINGS_AVAIL_STALE_V1 = InsightTemplate(
-    template_id="FUND_HOLDINGS_AVAIL_STALE_V1",
+FUND_TOP_HOLDINGS_V1 = InsightTemplate(
+    template_id="FUND_TOP_HOLDINGS_V1",
     page_type="fund_detail",
-    insight_code="holdings_avail_stale",
-    trigger_code="stale_data",
-    headline_template="Holdings data may be outdated (as of {as_of_date})",
-    body_template=(
-        "The most recent portfolio holdings for this fund are from {as_of_date}, "
-        "which is more than 60 days ago. Current sector and concentration analysis "
-        "may not reflect the latest portfolio composition."
+    insight_code="top_holdings",
+    trigger_code="holdings_gte_5",
+    compact_variants=[
+        "**Top holdings:** top 5 account for {top_5_weight_pct}% of AUM.",
+        "**Top book:** {top_5_weight_pct}% of AUM is in the five largest holdings.",
+        "**Largest positions:** top 5 holdings make up {top_5_weight_pct}% of the portfolio.",
+        "**Holding concentration:** five largest holdings total {top_5_weight_pct}%.",
+    ],
+    expanded_bullets=[
+        "**1:** {holding_1_name} — {holding_1_weight_pct}%",
+        "**2:** {holding_2_name} — {holding_2_weight_pct}%",
+        "**3:** {holding_3_name} — {holding_3_weight_pct}%",
+        "**4:** {holding_4_name} — {holding_4_weight_pct}%",
+        "**5:** {holding_5_name} — {holding_5_weight_pct}% (as of {as_of_date})",
+    ],
+    chip_keys=["top_5_weight_pct", "holding_count", "as_of_date"],
+    follow_up_label="Open holdings table",
+    allowed_conclusion_template=(
+        "The top 5 holdings account for {top_5_weight_pct}% of AUM as of {as_of_date}, "
+        "led by {holding_1_name} at {holding_1_weight_pct}%."
     ),
-    required_variables=["as_of_date"],
-    severity="warning",
-    priority=20,
-)
-
-FUND_HOLDINGS_DATA_FRESH_V1 = InsightTemplate(
-    template_id="FUND_HOLDINGS_DATA_FRESH_V1",
-    page_type="fund_detail",
-    insight_code="holdings_data_fresh",
-    trigger_code="fresh_data",
-    headline_template="Holdings data current as of {as_of_date}",
-    body_template=(
-        "Portfolio holdings data is current (as of {as_of_date}, within the last 30 days). "
-        "Sector and concentration analysis reflects the latest disclosed composition."
-    ),
-    required_variables=["as_of_date"],
-    severity="positive",
-    priority=12,
-)
-
-# Group 2: Concentration
-
-FUND_CONC_HIGH_V1 = InsightTemplate(
-    template_id="FUND_CONC_HIGH_V1",
-    page_type="fund_detail",
-    insight_code="conc_high",
-    trigger_code="top5_gt_35pct",
-    headline_template="High concentration: top 5 holdings are {top5_pct:.1f}% of portfolio",
-    body_template=(
-        "The top 5 holdings account for {top5_pct:.1f}% of the portfolio — above the "
-        "{threshold}% high-concentration threshold. Leading positions include "
-        "{top3_names}. This level of concentration amplifies the impact of "
-        "individual security outcomes on overall fund performance."
-    ),
-    required_variables=["top5_pct", "threshold", "top3_names"],
-    severity="warning",
-    priority=15,
-)
-
-FUND_CONC_MODERATE_V1 = InsightTemplate(
-    template_id="FUND_CONC_MODERATE_V1",
-    page_type="fund_detail",
-    insight_code="conc_moderate",
-    trigger_code="top5_20_35pct",
-    headline_template="Moderate concentration: top 5 at {top5_pct:.1f}%",
-    body_template=(
-        "Top 5 holdings represent {top5_pct:.1f}% of the portfolio — within the moderate "
-        "concentration range ({lower}%–{upper}%). Key positions: {top3_names}."
-    ),
-    required_variables=["top5_pct", "lower", "upper", "top3_names"],
+    source_tables=["selfmade_portfolio_holding", "selfmade_security_master"],
     severity="neutral",
-    priority=18,
+    priority=10,
 )
 
-FUND_CONC_LOW_V1 = InsightTemplate(
-    template_id="FUND_CONC_LOW_V1",
+FUND_TOP_HOLDINGS_LESS_THAN_5_V1 = InsightTemplate(
+    template_id="FUND_TOP_HOLDINGS_LESS_THAN_5_V1",
     page_type="fund_detail",
-    insight_code="conc_low",
-    trigger_code="top5_lt_20pct",
-    headline_template="Diversified holdings: top 5 at {top5_pct:.1f}%",
-    body_template=(
-        "Top 5 holdings represent only {top5_pct:.1f}% of the portfolio, indicating "
-        "broad diversification across positions. Key holdings include {top3_names}."
+    insight_code="top_holdings",
+    trigger_code="holdings_1_to_4",
+    compact_variants=[
+        "**Holdings shown:** only {holding_count} holdings are available for this fund.",
+        "**Limited holdings data:** {holding_count} holdings available in the latest file.",
+        "**Partial view:** latest holdings data has {holding_count} rows.",
+        "**Holdings coverage:** fewer than 5 holdings are available.",
+    ],
+    expanded_bullets=[
+        "**Available holdings:** {holding_count}",
+        "**Latest holding date:** {as_of_date}",
+        "**Action:** verify portfolio disclosure if this seems incomplete.",
+    ],
+    chip_keys=["holding_count", "as_of_date"],
+    follow_up_label="Open source holdings file",
+    allowed_conclusion_template=(
+        "Only {holding_count} holdings are available for this fund as of {as_of_date} — "
+        "fewer than the usual 5+ disclosed positions."
     ),
-    required_variables=["top5_pct", "top3_names"],
-    severity="positive",
-    priority=20,
-)
-
-FUND_CONC_TOP_NAMES_V1 = InsightTemplate(
-    template_id="FUND_CONC_TOP_NAMES_V1",
-    page_type="fund_detail",
-    insight_code="conc_top_names",
-    trigger_code="always",
-    headline_template="Top holding: {top1_name} at {top1_pct:.1f}%",
-    body_template=(
-        "Largest single holding: {top1_name} ({top1_pct:.1f}%). "
-        "Top 3 positions: {top3_names} (combined {top3_pct:.1f}%)."
-    ),
-    required_variables=["top1_name", "top1_pct", "top3_names", "top3_pct"],
+    source_tables=["selfmade_portfolio_holding"],
     severity="neutral",
-    priority=22,
+    priority=28,
 )
 
-# Group 3: Sectors
+# — Group 2: Sectors —
 
-FUND_SECTOR_CONCENTRATED_V1 = InsightTemplate(
-    template_id="FUND_SECTOR_CONCENTRATED_V1",
+FUND_SECTORS_UNAVAILABLE_V1 = InsightTemplate(
+    template_id="FUND_SECTORS_UNAVAILABLE_V1",
     page_type="fund_detail",
-    insight_code="sector_concentrated",
-    trigger_code="sectors_to_80_lte_3",
-    headline_template="Sector-concentrated: {sectors_to_80} sectors reach 80% of portfolio",
-    body_template=(
-        "Only {sectors_to_80} sector(s) are needed to cover 80% of this portfolio, "
-        "indicating high sectoral concentration. Dominant sectors: {top_sectors}. "
-        "Research candidates in this fund carry concentrated sector exposure."
+    insight_code="top_sectors",
+    trigger_code="sectors_lt_3",
+    compact_variants=[
+        "**Sector data:** fewer than 3 sectors are classified for this fund.",
+        "**Sector view:** limited — {sector_count} sector(s) classified.",
+        "**Sector coverage:** insufficient to show a top-3 breakdown.",
+        "**Sector data:** not enough classified sectors for this fund yet.",
+    ],
+    expanded_bullets=[
+        "**Sectors classified:** {sector_count}",
+        "**Reason:** holdings may be unclassified or too few to break down by sector.",
+        "**Action:** check holdings table directly if this seems incomplete.",
+    ],
+    chip_keys=["sector_count"],
+    follow_up_label="Open holdings table",
+    allowed_conclusion_template=(
+        "Only {sector_count} sector(s) are classified for this fund — not enough for a "
+        "top-3 sector breakdown."
     ),
-    required_variables=["sectors_to_80", "top_sectors"],
-    severity="warning",
-    priority=14,
+    source_tables=["selfmade_portfolio_holding", "selfmade_security_master"],
+    severity="neutral",
+    priority=29,
 )
 
-FUND_SECTOR_DIVERSIFIED_V1 = InsightTemplate(
-    template_id="FUND_SECTOR_DIVERSIFIED_V1",
+FUND_TOP_SECTORS_V1 = InsightTemplate(
+    template_id="FUND_TOP_SECTORS_V1",
     page_type="fund_detail",
-    insight_code="sector_diversified",
-    trigger_code="sectors_to_80_gte_6",
-    headline_template="Broad sector diversification: {sectors_to_80} sectors to reach 80%",
-    body_template=(
-        "{sectors_to_80} sectors are needed to cover 80% of the portfolio, "
-        "reflecting broad sectoral diversification. Top sector exposures: {top_sectors}."
+    insight_code="top_sectors",
+    trigger_code="sectors_gte_3",
+    compact_variants=[
+        "**Top sectors:** {sector_1} {sector_1_weight_pct}%, {sector_2} {sector_2_weight_pct}%, {sector_3} {sector_3_weight_pct}%.",
+        "**Sector mix:** led by {sector_1}, {sector_2}, and {sector_3}.",
+        "**Largest sectors:** {sector_1}, {sector_2}, and {sector_3} drive exposure.",
+        "**Sector leaders:** {sector_1} is the largest exposure at {sector_1_weight_pct}%.",
+    ],
+    expanded_bullets=[
+        "**{sector_1}:** {sector_1_weight_pct}%",
+        "**{sector_2}:** {sector_2_weight_pct}%",
+        "**{sector_3}:** {sector_3_weight_pct}%",
+        "**Top 3 total:** {top_3_sector_weight_pct}%",
+    ],
+    chip_keys=["sector_1", "sector_1_weight_pct", "top_3_sector_weight_pct"],
+    follow_up_label="Open sector exposure chart",
+    allowed_conclusion_template=(
+        "This fund's largest sector exposures are {sector_1} ({sector_1_weight_pct}%), "
+        "{sector_2} ({sector_2_weight_pct}%), and {sector_3} ({sector_3_weight_pct}%)."
     ),
-    required_variables=["sectors_to_80", "top_sectors"],
-    severity="positive",
-    priority=18,
-)
-
-FUND_SECTOR_FIN_HEAVY_V1 = InsightTemplate(
-    template_id="FUND_SECTOR_FIN_HEAVY_V1",
-    page_type="fund_detail",
-    insight_code="sector_fin_heavy",
-    trigger_code="financials_gt_35pct",
-    headline_template="Financials sector: {fin_pct:.1f}% of portfolio",
-    body_template=(
-        "Financial sector holdings represent {fin_pct:.1f}% of the portfolio, "
-        "which is above the {threshold}% elevated-exposure threshold. "
-        "This fund carries concentrated exposure to financial sector performance and policy."
-    ),
-    required_variables=["fin_pct", "threshold"],
-    severity="warning",
-    priority=16,
-)
-
-FUND_SECTOR_BALANCED_V1 = InsightTemplate(
-    template_id="FUND_SECTOR_BALANCED_V1",
-    page_type="fund_detail",
-    insight_code="sector_balanced",
-    trigger_code="no_single_sector_gt_25pct",
-    headline_template="Balanced sector allocation — no sector exceeds {max_sector_pct:.1f}%",
-    body_template=(
-        "No single sector exceeds {max_sector_pct:.1f}% of the portfolio. "
-        "This balanced allocation reduces concentration risk across sector cycles. "
-        "Largest sector: {top_sector_name} at {max_sector_pct:.1f}%."
-    ),
-    required_variables=["max_sector_pct", "top_sector_name"],
-    severity="positive",
+    source_tables=["selfmade_portfolio_holding", "selfmade_security_master"],
+    severity="neutral",
     priority=19,
 )
 
-# Group 4: 3Y Performance
-
-FUND_PERF_IR_STRONG_V1 = InsightTemplate(
-    template_id="FUND_PERF_IR_STRONG_V1",
+FUND_SECTORS_TO_80_V1 = InsightTemplate(
+    template_id="FUND_SECTORS_TO_80_V1",
     page_type="fund_detail",
-    insight_code="perf_ir_strong",
-    trigger_code="ir_3yr_gt_0.5",
-    headline_template="Strong 3Y information ratio: {ir_3yr:.2f}",
-    body_template=(
-        "The 3-year information ratio of {ir_3yr:.2f} places this fund in the top tier "
-        "for risk-adjusted excess return consistency. An IR above {threshold} indicates "
-        "the fund has delivered active returns with relatively low tracking error over "
-        "the evaluation window. Category rank: {rank_in_category} of {total_in_category}."
+    insight_code="sectors_to_80",
+    trigger_code="sectors_gte_3",
+    compact_variants=[
+        "**Sector spread:** {sectors_to_80} sectors make up {cumulative_sector_weight_pct}% of AUM.",
+        "**Diversification check:** it takes {sectors_to_80} sectors to cross 80% AUM.",
+        "**Sector concentration:** top {sectors_to_80} sectors reach {cumulative_sector_weight_pct}% of AUM.",
+        "**80% build-up:** {sectors_to_80} sectors explain most of the portfolio.",
+    ],
+    expanded_bullets=[
+        "**Sectors to 80%:** {sectors_to_80}",
+        "**Cumulative weight:** {cumulative_sector_weight_pct}%",
+        "**Profile:** {sector_profile_label}",
+        "**Largest sector:** {sector_1} at {sector_1_weight_pct}%",
+    ],
+    chip_keys=["sectors_to_80", "sector_profile_label"],
+    follow_up_label="Open sector table sorted by weight",
+    allowed_conclusion_template=(
+        "{sectors_to_80} sectors account for {cumulative_sector_weight_pct}% of AUM — a "
+        "{sector_profile_label} sector profile."
     ),
-    required_variables=["ir_3yr", "threshold", "rank_in_category", "total_in_category"],
+    source_tables=["selfmade_portfolio_holding", "selfmade_security_master"],
+    severity="neutral",
+    priority=14,
+)
+
+# — Group 3: 3Y Information Ratio (percentile-based, 3-way split) —
+
+FUND_3Y_IR_INSUFFICIENT_HISTORY_V1 = InsightTemplate(
+    template_id="FUND_3Y_IR_INSUFFICIENT_HISTORY_V1",
+    page_type="fund_detail",
+    insight_code="3y_ir",
+    trigger_code="ir_missing",
+    compact_variants=[
+        "**3Y IR:** not available — insufficient 3-year return history.",
+        "**Risk-adjusted signal:** unavailable until 3 years of history accrue.",
+        "**3Y IR check:** this fund doesn't have enough history yet.",
+        "**Performance quality:** 3Y IR requires a longer track record.",
+    ],
+    expanded_bullets=[
+        "**Status:** insufficient 3-year return history for this fund.",
+        "**Requirement:** 3 years of fund and benchmark NAV history.",
+        "**Alternative:** check 1-year metrics if available.",
+    ],
+    chip_keys=[],
+    follow_up_label="Open available metrics",
+    allowed_conclusion_template=(
+        "This fund does not yet have enough return history to compute a 3-year information ratio."
+    ),
+    source_tables=["selfmade_scheme_metrics"],
+    severity="neutral",
+    priority=27,
+)
+
+FUND_3Y_IR_TOP_TIER_V1 = InsightTemplate(
+    template_id="FUND_3Y_IR_TOP_TIER_V1",
+    page_type="fund_detail",
+    insight_code="3y_ir",
+    trigger_code="ir_percentile_gte_70",
+    compact_variants=[
+        "**3Y IR:** {ir_3y}. Top-tier risk-adjusted consistency.",
+        "**3Y IR:** {ir_3y}, placing the fund in the stronger category bucket.",
+        "**Risk-adjusted signal:** 3Y IR is strong at {ir_3y}.",
+        "**3Y performance quality:** strong IR at {ir_3y}.",
+    ],
+    expanded_bullets=[
+        "**3Y IR:** {ir_3y}",
+        "**Category percentile:** {ir_3y_percentile}th",
+        "**Rule bucket:** strong",
+        "**Tooltip:** IR above 0.5 usually indicates positive active returns with controlled tracking error.",
+    ],
+    chip_keys=["ir_3y", "ir_3y_percentile"],
+    follow_up_label='Ask "Why is the 3Y IR strong?"',
+    allowed_conclusion_template=(
+        "This fund's 3Y information ratio of {ir_3y} is in the {ir_3y_percentile}th percentile "
+        "of its category — a top-tier risk-adjusted consistency signal."
+    ),
+    source_tables=["selfmade_scheme_metrics", "selfmade_scheme_ranking"],
     severity="positive",
     priority=8,
 )
 
-FUND_PERF_IR_WEAK_V1 = InsightTemplate(
-    template_id="FUND_PERF_IR_WEAK_V1",
+FUND_3Y_IR_ACCEPTABLE_V1 = InsightTemplate(
+    template_id="FUND_3Y_IR_ACCEPTABLE_V1",
     page_type="fund_detail",
-    insight_code="perf_ir_weak",
-    trigger_code="ir_3yr_lt_0.1",
-    headline_template="Below-threshold information ratio: {ir_3yr:.2f}",
-    body_template=(
-        "The 3-year information ratio of {ir_3yr:.2f} is below the {threshold} threshold "
-        "for consistent active return generation. This may reflect elevated tracking error "
-        "relative to active return, or inconsistency in outperforming the benchmark. "
-        "Category rank: {rank_in_category} of {total_in_category}."
+    insight_code="3y_ir",
+    trigger_code="ir_percentile_40_70",
+    compact_variants=[
+        "**3Y IR:** {ir_3y}. Acceptable, but not a clear leader.",
+        "**3Y IR:** {ir_3y}, broadly middle-of-pack for the category.",
+        "**Risk-adjusted signal:** 3Y IR is acceptable at {ir_3y}.",
+        "**3Y IR check:** fair, but not top-tier.",
+    ],
+    expanded_bullets=[
+        "**3Y IR:** {ir_3y}",
+        "**Category percentile:** {ir_3y_percentile}th",
+        "**Rule bucket:** acceptable",
+        "**Action:** check Sortino, downside capture and improvement trend.",
+    ],
+    chip_keys=["ir_3y", "ir_3y_percentile"],
+    follow_up_label="Open 3Y metrics panel",
+    allowed_conclusion_template=(
+        "This fund's 3Y information ratio of {ir_3y} is in the {ir_3y_percentile}th percentile "
+        "of its category — acceptable, but not a category leader."
     ),
-    required_variables=["ir_3yr", "threshold", "rank_in_category", "total_in_category"],
+    source_tables=["selfmade_scheme_metrics", "selfmade_scheme_ranking"],
+    severity="neutral",
+    priority=9,
+)
+
+FUND_3Y_IR_WEAK_V1 = InsightTemplate(
+    template_id="FUND_3Y_IR_WEAK_V1",
+    page_type="fund_detail",
+    insight_code="3y_ir",
+    trigger_code="ir_percentile_lt_40",
+    compact_variants=[
+        "**3Y IR:** {ir_3y}. Weak versus category peers.",
+        "**Risk-adjusted concern:** 3Y IR is low at {ir_3y}.",
+        "**3Y IR check:** below the category comfort zone.",
+        "**Performance quality:** 3Y IR is weaker than most peers.",
+    ],
+    expanded_bullets=[
+        "**3Y IR:** {ir_3y}",
+        "**Category percentile:** {ir_3y_percentile}th",
+        "**Rule bucket:** weak",
+        "**Action:** inspect tracking error and excess-return consistency.",
+    ],
+    chip_keys=["ir_3y", "ir_3y_percentile"],
+    follow_up_label="Open rolling IR chart",
+    allowed_conclusion_template=(
+        "This fund's 3Y information ratio of {ir_3y} is in the {ir_3y_percentile}th percentile "
+        "of its category — weak versus peers."
+    ),
+    source_tables=["selfmade_scheme_metrics", "selfmade_scheme_ranking"],
     severity="negative",
     priority=9,
 )
 
-FUND_PERF_ALPHA_POSITIVE_V1 = InsightTemplate(
-    template_id="FUND_PERF_ALPHA_POSITIVE_V1",
-    page_type="fund_detail",
-    insight_code="perf_alpha_positive",
-    trigger_code="active_3yr_gt_2pct",
-    headline_template="Positive 3Y active return: {active_3yr_ret:+.2f}%",
-    body_template=(
-        "This fund has delivered {active_3yr_ret:+.2f}% active return versus its "
-        "benchmark ({benchmark_name}) over 3 years, exceeding the {threshold}% "
-        "positive-contribution threshold. The fund return was {fund_3yr_ret:.2f}% "
-        "versus the benchmark's implied return."
-    ),
-    required_variables=["active_3yr_ret", "benchmark_name", "threshold", "fund_3yr_ret"],
-    severity="positive",
-    priority=10,
-)
+# — Group 4: 3Y overall performance scorecard —
 
-FUND_PERF_ALPHA_NEGATIVE_V1 = InsightTemplate(
-    template_id="FUND_PERF_ALPHA_NEGATIVE_V1",
+FUND_3Y_PERFORMANCE_STRONG_V1 = InsightTemplate(
+    template_id="FUND_3Y_PERFORMANCE_STRONG_V1",
     page_type="fund_detail",
-    insight_code="perf_alpha_negative",
-    trigger_code="active_3yr_lt_0pct",
-    headline_template="Negative 3Y active return: {active_3yr_ret:+.2f}%",
-    body_template=(
-        "This fund's 3-year active return of {active_3yr_ret:+.2f}% is negative versus "
-        "{benchmark_name}. The fund return was {fund_3yr_ret:.2f}%. "
-        "Sustained negative active returns reduce the structural case for an actively "
-        "managed position versus a passive alternative."
-    ),
-    required_variables=["active_3yr_ret", "benchmark_name", "fund_3yr_ret"],
-    severity="negative",
-    priority=11,
-)
-
-FUND_PERF_RANK_TIER_V1 = InsightTemplate(
-    template_id="FUND_PERF_RANK_TIER_V1",
-    page_type="fund_detail",
-    insight_code="perf_rank_tier",
-    trigger_code="always",
-    headline_template="Category rank: {rank_in_category} of {total_in_category} ({tier})",
-    body_template=(
-        "This fund ranks {rank_in_category} out of {total_in_category} in {category}, "
-        "placing it in the {tier} tier (composite score: {composite_score:.1f}). "
-        "Score components — IR₃: {pct_ir:.0f}th percentile, "
-        "Sharpe₃: {pct_sharpe:.0f}th percentile."
-    ),
-    required_variables=[
-        "rank_in_category", "total_in_category", "category",
-        "tier", "composite_score", "pct_ir", "pct_sharpe",
+    insight_code="3y_performance",
+    trigger_code="good_3y",
+    compact_variants=[
+        "**3Y view:** strong risk-adjusted performance across key metrics.",
+        "**3Y signal:** positive across IR, Sortino and consistency.",
+        "**3Y quality:** fund screens well on risk-adjusted metrics.",
+        "**3Y scorecard:** strong overall risk-adjusted profile.",
     ],
-    severity="neutral",
-    priority=6,
-)
-
-# Group 5: Trend
-
-FUND_TREND_IMPROVING_V1 = InsightTemplate(
-    template_id="FUND_TREND_IMPROVING_V1",
-    page_type="fund_detail",
-    insight_code="trend_improving",
-    trigger_code="rank_delta_lte_neg3",
-    headline_template="Improving trend: rank moved from {prev_rank} to {current_rank}",
-    body_template=(
-        "This fund has improved {abs_delta} place(s) in the last evaluation period "
-        "(from rank {prev_rank} to {current_rank} in {category}). "
-        "Composite score: {composite_score:.1f}. This upward movement meets the "
-        "structural improvement signal threshold."
-    ),
-    required_variables=[
-        "abs_delta", "prev_rank", "current_rank", "category", "composite_score",
+    expanded_bullets=[
+        "**3Y IR:** {ir_3y}",
+        "**Sortino:** {sortino_3y}",
+        "**Outperformance ratio:** {outperformance_ratio_3y_pct}%",
+        "**Category rank:** {rank_in_category} of {total_in_category}",
     ],
+    chip_keys=["ir_3y", "sortino_3y", "outperformance_ratio_3y_pct"],
+    follow_up_label="Open full metric scorecard",
+    allowed_conclusion_template=(
+        "This fund screens strong on 3-year risk-adjusted metrics: IR {ir_3y}, Sortino "
+        "{sortino_3y}, and a {outperformance_ratio_3y_pct}% outperformance ratio."
+    ),
+    source_tables=["selfmade_scheme_metrics"],
     severity="positive",
     priority=7,
 )
 
-FUND_TREND_DECLINING_V1 = InsightTemplate(
-    template_id="FUND_TREND_DECLINING_V1",
+FUND_3Y_PERFORMANCE_MIXED_V1 = InsightTemplate(
+    template_id="FUND_3Y_PERFORMANCE_MIXED_V1",
     page_type="fund_detail",
-    insight_code="trend_declining",
-    trigger_code="rank_delta_gte_3",
-    headline_template="Declining trend: rank moved from {prev_rank} to {current_rank}",
-    body_template=(
-        "This fund has dropped {abs_delta} place(s) since the prior evaluation "
-        "(from rank {prev_rank} to {current_rank} in {category}). "
-        "Composite score: {composite_score:.1f}. Monitor for further changes before "
-        "drawing conclusions from a single-period movement."
-    ),
-    required_variables=[
-        "abs_delta", "prev_rank", "current_rank", "category", "composite_score",
+    insight_code="3y_performance",
+    trigger_code="mixed_3y",
+    compact_variants=[
+        "**3Y view:** mixed. Some metrics are good, others need checking.",
+        "**3Y signal:** not one-sided; review the metric breakdown.",
+        "**3Y quality:** mixed evidence across risk and return.",
+        "**3Y scorecard:** no clean strong or weak classification.",
     ],
-    severity="warning",
-    priority=7,
-)
-
-FUND_TREND_STABLE_V1 = InsightTemplate(
-    template_id="FUND_TREND_STABLE_V1",
-    page_type="fund_detail",
-    insight_code="trend_stable",
-    trigger_code="rank_delta_small",
-    headline_template="Stable rank position: {current_rank} in {category}",
-    body_template=(
-        "Rank position has been stable at {current_rank} in {category} "
-        "(delta: {rank_delta:+d} places since prior period). "
-        "Composite score: {composite_score:.1f}."
+    expanded_bullets=[
+        "**Positive:** {positive_metric_summary}",
+        "**Concern:** {negative_metric_summary}",
+        "**Action:** compare rolling IR, Sortino and downside capture together.",
+    ],
+    chip_keys=["ir_3y", "sortino_3y"],
+    follow_up_label="Open metric comparison panel",
+    allowed_conclusion_template=(
+        "This fund's 3-year performance is mixed — {positive_metric_summary}, but "
+        "{negative_metric_summary}."
     ),
-    required_variables=["current_rank", "category", "rank_delta", "composite_score"],
-    severity="neutral",
-    priority=12,
-)
-
-FUND_TREND_NEW_V1 = InsightTemplate(
-    template_id="FUND_TREND_NEW_V1",
-    page_type="fund_detail",
-    insight_code="trend_new",
-    trigger_code="no_prev_rank",
-    headline_template="First evaluation period for this fund in {category}",
-    body_template=(
-        "This is the first ranking snapshot for this fund in {category}. "
-        "Rank: {current_rank} of {total_in_category}. "
-        "Trend signals will appear after the next evaluation period."
-    ),
-    required_variables=["category", "current_rank", "total_in_category"],
-    severity="neutral",
-    priority=15,
-)
-
-
-# ── Section 9 V1: Fund Comparison (CMP_*_V1) ─────────────────────────────────
-# 28 templates covering: holdings overlap, sector overlap, category leader,
-# IR leadership, recent improvement, laggard flagging, and best-overall.
-
-# ── Holdings overlap 2-fund ───────────────────────────────────────────────────
-
-CMP_HOLDINGS_OVERLAP_VERY_HIGH_2F_V1 = InsightTemplate(
-    template_id="CMP_HOLDINGS_OVERLAP_VERY_HIGH_2F_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_hld_overlap_vhigh_2f",
-    trigger_code="cmp_holdings_check_2f",
-    headline_template="Very high holdings overlap: {weighted_overlap:.1f}% weighted",
-    body_template=(
-        "Funds {fund_a_name} and {fund_b_name} share {weighted_overlap:.1f}% weighted overlap "
-        "({common_count} common securities, Jaccard {jaccard:.1f}%). "
-        "This level of similarity substantially reduces the diversification benefit of holding both. "
-        "Holding both funds is structurally close to a concentrated single-fund position."
-    ),
-    required_variables=["fund_a_name", "fund_b_name", "weighted_overlap", "common_count", "jaccard"],
-    severity="warning",
-    priority=5,
-)
-
-CMP_HOLDINGS_OVERLAP_HIGH_2F_V1 = InsightTemplate(
-    template_id="CMP_HOLDINGS_OVERLAP_HIGH_2F_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_hld_overlap_high_2f",
-    trigger_code="cmp_holdings_check_2f",
-    headline_template="High holdings overlap: {weighted_overlap:.1f}% weighted",
-    body_template=(
-        "Funds {fund_a_name} and {fund_b_name} share {weighted_overlap:.1f}% weighted overlap "
-        "({common_count} common securities, Jaccard {jaccard:.1f}%). "
-        "This is meaningful portfolio commonality — holding both provides limited incremental "
-        "diversification relative to a single-fund position. "
-        "Review whether the active positions in each fund justify the dual allocation."
-    ),
-    required_variables=["fund_a_name", "fund_b_name", "weighted_overlap", "common_count", "jaccard"],
-    severity="warning",
-    priority=6,
-)
-
-CMP_HOLDINGS_OVERLAP_MODERATE_2F_V1 = InsightTemplate(
-    template_id="CMP_HOLDINGS_OVERLAP_MODERATE_2F_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_hld_overlap_mod_2f",
-    trigger_code="cmp_holdings_check_2f",
-    headline_template="Moderate holdings overlap: {weighted_overlap:.1f}% weighted",
-    body_template=(
-        "Funds {fund_a_name} and {fund_b_name} share {weighted_overlap:.1f}% weighted overlap "
-        "({common_count} common securities, Jaccard {jaccard:.1f}%). "
-        "Some diversification benefit exists — the funds share a meaningful common core "
-        "but each holds distinct active positions that may justify a combined allocation."
-    ),
-    required_variables=["fund_a_name", "fund_b_name", "weighted_overlap", "common_count", "jaccard"],
-    severity="neutral",
-    priority=7,
-)
-
-CMP_HOLDINGS_OVERLAP_LOW_2F_V1 = InsightTemplate(
-    template_id="CMP_HOLDINGS_OVERLAP_LOW_2F_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_hld_overlap_low_2f",
-    trigger_code="cmp_holdings_check_2f",
-    headline_template="Low holdings overlap: {weighted_overlap:.1f}% weighted",
-    body_template=(
-        "Funds {fund_a_name} and {fund_b_name} share only {weighted_overlap:.1f}% weighted overlap "
-        "({common_count} common securities, Jaccard {jaccard:.1f}%). "
-        "Strong diversification potential — the portfolios are structurally distinct, "
-        "and a combined allocation may offer meaningful exposure breadth."
-    ),
-    required_variables=["fund_a_name", "fund_b_name", "weighted_overlap", "common_count", "jaccard"],
-    severity="positive",
-    priority=8,
-)
-
-CMP_HOLDINGS_OVERLAP_UNAVAILABLE_2F_V1 = InsightTemplate(
-    template_id="CMP_HOLDINGS_OVERLAP_UNAVAILABLE_2F_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_hld_overlap_unavail_2f",
-    trigger_code="cmp_holdings_check_2f",
-    headline_template="Holdings overlap: data not available",
-    body_template=(
-        "Portfolio holdings data is not available for one or both of the compared funds. "
-        "Holdings overlap, Jaccard similarity, and common-securities analysis cannot be computed. "
-        "This analysis will be available after the next data refresh cycle."
-    ),
-    required_variables=[],
-    severity="neutral",
-    priority=15,
-)
-
-# ── Holdings overlap multi-fund (3-4) ─────────────────────────────────────────
-
-CMP_HOLDINGS_OVERLAP_MULTI_HIGH_V1 = InsightTemplate(
-    template_id="CMP_HOLDINGS_OVERLAP_MULTI_HIGH_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_hld_overlap_multi_high",
-    trigger_code="cmp_holdings_check_multi",
-    headline_template="High average pairwise overlap across {num_funds} funds: {avg_pairwise_overlap:.1f}%",
-    body_template=(
-        "The {num_funds} funds being compared ({fund_names}) show an average pairwise weighted overlap "
-        "of {avg_pairwise_overlap:.1f}%. This indicates a high degree of structural similarity "
-        "across the group, which substantially reduces the diversification benefit of the combined allocation. "
-        "Consider whether this multi-fund structure adds genuine breadth."
-    ),
-    required_variables=["num_funds", "fund_names", "avg_pairwise_overlap"],
-    severity="warning",
-    priority=5,
-)
-
-CMP_HOLDINGS_OVERLAP_MULTI_MODERATE_V1 = InsightTemplate(
-    template_id="CMP_HOLDINGS_OVERLAP_MULTI_MODERATE_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_hld_overlap_multi_mod",
-    trigger_code="cmp_holdings_check_multi",
-    headline_template="Moderate average pairwise overlap across {num_funds} funds: {avg_pairwise_overlap:.1f}%",
-    body_template=(
-        "The {num_funds} funds being compared ({fund_names}) show an average pairwise weighted overlap "
-        "of {avg_pairwise_overlap:.1f}%. Each pair shares a meaningful common core, "
-        "but distinct active positions across the group may provide some incremental diversification value."
-    ),
-    required_variables=["num_funds", "fund_names", "avg_pairwise_overlap"],
-    severity="neutral",
-    priority=7,
-)
-
-CMP_HOLDINGS_OVERLAP_MULTI_LOW_V1 = InsightTemplate(
-    template_id="CMP_HOLDINGS_OVERLAP_MULTI_LOW_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_hld_overlap_multi_low",
-    trigger_code="cmp_holdings_check_multi",
-    headline_template="Low average pairwise overlap across {num_funds} funds: {avg_pairwise_overlap:.1f}%",
-    body_template=(
-        "The {num_funds} funds being compared ({fund_names}) show an average pairwise weighted overlap "
-        "of only {avg_pairwise_overlap:.1f}%. The group appears structurally distinct, "
-        "suggesting meaningful diversification potential across the combined allocation."
-    ),
-    required_variables=["num_funds", "fund_names", "avg_pairwise_overlap"],
-    severity="positive",
-    priority=8,
-)
-
-CMP_HOLDINGS_OVERLAP_MULTI_UNAVAILABLE_V1 = InsightTemplate(
-    template_id="CMP_HOLDINGS_OVERLAP_MULTI_UNAVAILABLE_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_hld_overlap_multi_unavail",
-    trigger_code="cmp_holdings_check_multi",
-    headline_template="Holdings overlap: data not available for one or more funds",
-    body_template=(
-        "Portfolio holdings data is missing for one or more of the {num_funds} funds being compared "
-        "({fund_names}). Pairwise overlap analysis cannot be fully computed. "
-        "Results will be available after the next holdings data refresh."
-    ),
-    required_variables=["num_funds", "fund_names"],
-    severity="neutral",
-    priority=15,
-)
-
-# ── Sector overlap ────────────────────────────────────────────────────────────
-
-CMP_SECTOR_OVERLAP_HIGH_V1 = InsightTemplate(
-    template_id="CMP_SECTOR_OVERLAP_HIGH_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_sector_overlap_high",
-    trigger_code="cmp_sector_check",
-    headline_template="High sector overlap: {sector_overlap:.1f}% of AUM in common sectors",
-    body_template=(
-        "The compared funds ({fund_names}) share {sector_overlap:.1f}% of their combined AUM "
-        "in common sectors. This high sector co-exposure means combined macro and policy risks "
-        "may not be effectively diversified. "
-        "Review whether the sector concentration serves a deliberate thematic view."
-    ),
-    required_variables=["fund_names", "sector_overlap"],
-    severity="warning",
-    priority=9,
-)
-
-CMP_SECTOR_OVERLAP_MODERATE_V1 = InsightTemplate(
-    template_id="CMP_SECTOR_OVERLAP_MODERATE_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_sector_overlap_mod",
-    trigger_code="cmp_sector_check",
-    headline_template="Moderate sector overlap: {sector_overlap:.1f}% in common sectors",
-    body_template=(
-        "The compared funds ({fund_names}) share {sector_overlap:.1f}% of their combined AUM "
-        "in common sectors. Some sector co-exposure exists, though the funds also differ "
-        "in sector allocation, providing partial sector-level diversification."
-    ),
-    required_variables=["fund_names", "sector_overlap"],
-    severity="neutral",
-    priority=10,
-)
-
-CMP_SECTOR_OVERLAP_LOW_V1 = InsightTemplate(
-    template_id="CMP_SECTOR_OVERLAP_LOW_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_sector_overlap_low",
-    trigger_code="cmp_sector_check",
-    headline_template="Low sector overlap: {sector_overlap:.1f}% in common sectors",
-    body_template=(
-        "The compared funds ({fund_names}) share only {sector_overlap:.1f}% of combined AUM "
-        "in common sectors. The funds appear to be meaningfully differentiated at the sector level, "
-        "which may contribute to macroeconomic and policy-cycle diversification."
-    ),
-    required_variables=["fund_names", "sector_overlap"],
-    severity="positive",
-    priority=11,
-)
-
-CMP_SECTOR_OVERLAP_UNAVAILABLE_V1 = InsightTemplate(
-    template_id="CMP_SECTOR_OVERLAP_UNAVAILABLE_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_sector_overlap_unavail",
-    trigger_code="cmp_sector_check",
-    headline_template="Sector overlap: data not available",
-    body_template=(
-        "Sector allocation data is not available for one or more of the compared funds ({fund_names}). "
-        "Sector overlap analysis will be available after holdings data has been refreshed."
-    ),
-    required_variables=["fund_names"],
-    severity="neutral",
-    priority=20,
-)
-
-# ── Category leader ───────────────────────────────────────────────────────────
-
-CMP_SAME_CATEGORY_CLEAR_LEADER_V1 = InsightTemplate(
-    template_id="CMP_SAME_CATEGORY_CLEAR_LEADER_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_cat_clear_leader",
-    trigger_code="cmp_category_check",
-    headline_template="Clear structural leader in {category}: {leader_name}",
-    body_template=(
-        "All compared funds belong to {category}, enabling direct peer comparison. "
-        "{leader_name} leads with a composite score gap of {score_gap:.1f} points "
-        "and wins on {metrics_won} of the compared metrics. "
-        "This margin is sufficient to identify a tentative structural leader — "
-        "though rankings can shift with metric updates."
-    ),
-    required_variables=["leader_name", "category", "score_gap", "metrics_won"],
-    severity="positive",
-    priority=12,
-)
-
-CMP_SAME_CATEGORY_NO_CLEAR_LEADER_V1 = InsightTemplate(
-    template_id="CMP_SAME_CATEGORY_NO_CLEAR_LEADER_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_cat_no_leader",
-    trigger_code="cmp_category_check",
-    headline_template="No clear leader in {category} — treat {score_gap:.1f}-point gap as narrow",
-    body_template=(
-        "All compared funds belong to {category}. "
-        "The composite score gap between the top- and bottom-ranked fund is only {score_gap:.1f} points — "
-        "treat this as a narrow margin. Small metric changes could reshuffle the ranking. "
-        "Monitor IR slope and rank delta over upcoming evaluation periods before drawing conclusions."
-    ),
-    required_variables=["category", "score_gap"],
+    source_tables=["selfmade_scheme_metrics"],
     severity="neutral",
     priority=13,
 )
 
-CMP_DIFFERENT_CATEGORY_NO_LEADER_V1 = InsightTemplate(
-    template_id="CMP_DIFFERENT_CATEGORY_NO_LEADER_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_cat_diff_category",
-    trigger_code="cmp_category_check",
-    headline_template="Cross-category comparison: {num_categories} categories present",
-    body_template=(
-        "The compared funds span {num_categories} categories: {categories_str}. "
-        "Direct rank comparison across categories is not meaningful — each fund uses "
-        "a different benchmark, and composite scores reflect within-category peer rankings. "
-        "Interpret relative metrics (IR, active return) with the benchmark differences in mind."
-    ),
-    required_variables=["categories_str", "num_categories"],
-    severity="warning",
-    priority=14,
-)
+# — Group 5: Trend —
 
-# ── IR leadership ─────────────────────────────────────────────────────────────
-
-CMP_IR_LEADER_CLEAR_V1 = InsightTemplate(
-    template_id="CMP_IR_LEADER_CLEAR_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_ir_leader_clear",
-    trigger_code="cmp_ir_check",
-    headline_template="Clear 3Y IR leader: {leader_name} (IR {leader_ir:.2f}, gap {gap:.2f})",
-    body_template=(
-        "{leader_name} has the highest 3-year information ratio ({leader_ir:.2f}) "
-        "among the compared funds, with a gap of {gap:.2f} over the nearest peer. "
-        "This margin indicates a structurally consistent edge in risk-adjusted excess return "
-        "relative to the benchmark over the evaluation period."
-    ),
-    required_variables=["leader_name", "leader_ir", "gap"],
-    severity="positive",
-    priority=16,
-)
-
-CMP_IR_LEADER_CLOSE_V1 = InsightTemplate(
-    template_id="CMP_IR_LEADER_CLOSE_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_ir_leader_close",
-    trigger_code="cmp_ir_check",
-    headline_template="Narrow 3Y IR difference: {leader_name} leads by {gap:.2f}",
-    body_template=(
-        "{leader_name} marginally leads on 3-year information ratio ({leader_ir:.2f}), "
-        "but the gap of {gap:.2f} over the nearest peer is narrow — treat this as close. "
-        "IR slope and recent improvement metrics may be more informative than the point-in-time IR alone."
-    ),
-    required_variables=["leader_name", "leader_ir", "gap"],
-    severity="neutral",
-    priority=17,
-)
-
-CMP_IR_CONFLICT_RECENT_IMPROVER_V1 = InsightTemplate(
-    template_id="CMP_IR_CONFLICT_RECENT_IMPROVER_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_ir_conflict",
-    trigger_code="cmp_ir_check",
-    headline_template="IR conflict: {ir_leader_name} leads 3Y IR, but {slope_leader_name} is improving faster",
-    body_template=(
-        "{ir_leader_name} leads on 3-year information ratio ({ir_leader_val:.2f}), "
-        "but {slope_leader_name} shows a stronger positive IR slope ({slope_leader_val:+.4f}/month), "
-        "indicating faster recent improvement in risk-adjusted active return. "
-        "This structural conflict merits tracking over the next 1-2 evaluation periods before drawing conclusions."
-    ),
-    required_variables=["ir_leader_name", "slope_leader_name", "ir_leader_val", "slope_leader_val"],
-    severity="neutral",
-    priority=18,
-)
-
-CMP_IR_UNAVAILABLE_V1 = InsightTemplate(
-    template_id="CMP_IR_UNAVAILABLE_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_ir_unavail",
-    trigger_code="cmp_ir_check",
-    headline_template="3Y IR data not available for one or more compared funds",
-    body_template=(
-        "Information ratio data is missing for one or more of the compared funds ({fund_names}). "
-        "IR comparison cannot be completed. This analysis will be available after metric recalculation."
-    ),
-    required_variables=["fund_names"],
-    severity="neutral",
-    priority=25,
-)
-
-# ── Recent improvement ────────────────────────────────────────────────────────
-
-CMP_RECENT_IMPROVEMENT_LEADER_CLEAR_V1 = InsightTemplate(
-    template_id="CMP_RECENT_IMPROVEMENT_LEADER_CLEAR_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_improvement_clear",
-    trigger_code="cmp_improvement_check",
-    headline_template="Clear recent improvement leader: {leader_name}",
-    body_template=(
-        "{leader_name} leads on recent improvement with an improvement score of {improvement_score:+.4f} "
-        "and a gap of {gap:.4f} over the next fund. "
-        "This positive trajectory suggests strengthening risk-adjusted performance relative to peers — "
-        "a signal worth monitoring as a potential structural improvement indicator."
-    ),
-    required_variables=["leader_name", "improvement_score", "gap"],
-    severity="positive",
-    priority=19,
-)
-
-CMP_RECENT_IMPROVEMENT_CLOSE_V1 = InsightTemplate(
-    template_id="CMP_RECENT_IMPROVEMENT_CLOSE_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_improvement_close",
-    trigger_code="cmp_improvement_check",
-    headline_template="Similar recent improvement trajectory across funds",
-    body_template=(
-        "{leader_name} marginally leads on recent improvement (score {improvement_score:+.4f}), "
-        "but the gap of {gap:.4f} to the next fund is narrow — treat as close. "
-        "Continue monitoring improvement slope across evaluation periods."
-    ),
-    required_variables=["leader_name", "improvement_score", "gap"],
-    severity="neutral",
-    priority=21,
-)
-
-CMP_RECENT_IMPROVEMENT_NONE_V1 = InsightTemplate(
-    template_id="CMP_RECENT_IMPROVEMENT_NONE_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_improvement_none",
-    trigger_code="cmp_improvement_check",
-    headline_template="No positive improvement signal detected in compared funds",
-    body_template=(
-        "None of the compared funds ({fund_names}) shows a clearly positive recent improvement trajectory. "
-        "IR slopes are flat or declining across the comparison set. "
-        "This may reflect category-level headwinds rather than fund-specific weakness."
-    ),
-    required_variables=["fund_names"],
-    severity="warning",
-    priority=22,
-)
-
-# ── Laggard flagging ──────────────────────────────────────────────────────────
-
-CMP_LAGGARD_CLEAR_V1 = InsightTemplate(
-    template_id="CMP_LAGGARD_CLEAR_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_laggard_clear",
-    trigger_code="cmp_laggard_check",
-    headline_template="Relative laggard identified: {laggard_name}",
-    body_template=(
-        "{laggard_name} is the weakest fund in this comparison across multiple dimensions: "
-        "3Y IR of {laggard_ir_pct:.2f}, IR slope of {laggard_ir_slope:+.4f}/month, "
-        "and a rank position {rank_delta:+d} places versus the prior snapshot. "
-        "Downside capture: {laggard_downside_capture}. "
-        "This combination of signals warrants careful evaluation before continued allocation."
-    ),
-    required_variables=[
-        "laggard_name", "laggard_ir_pct", "laggard_ir_slope",
-        "laggard_downside_capture", "rank_delta",
+FUND_TREND_INSUFFICIENT_DATA_V1 = InsightTemplate(
+    template_id="FUND_TREND_INSUFFICIENT_DATA_V1",
+    page_type="fund_detail",
+    insight_code="trend",
+    trigger_code="trend_data_missing",
+    compact_variants=[
+        "**Trend:** not available — insufficient monthly IR history.",
+        "**Momentum signal:** unavailable until more monthly data accrues.",
+        "**Trend check:** this fund doesn't have enough rolling IR points yet.",
+        "**Trend status:** requires at least 6 months of rolling IR.",
     ],
-    severity="warning",
-    priority=23,
+    expanded_bullets=[
+        "**Status:** fewer than 6 monthly IR observations available.",
+        "**Requirement:** 6+ months of rolling information ratio history.",
+        "**Alternative:** check the category rank-history chart instead.",
+    ],
+    chip_keys=[],
+    follow_up_label="Open rank history chart",
+    allowed_conclusion_template=(
+        "This fund does not yet have enough monthly rolling-IR history to compute a trend signal."
+    ),
+    source_tables=["ratio_3year_monthlyret"],
+    severity="neutral",
+    priority=26,
 )
 
-CMP_LAGGARD_SOFT_V1 = InsightTemplate(
-    template_id="CMP_LAGGARD_SOFT_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_laggard_soft",
-    trigger_code="cmp_laggard_check",
-    headline_template="Soft laggard signal: {laggard_name} shows weak conditions",
-    body_template=(
-        "{laggard_name} shows weakness on the following dimensions: {weak_conditions}. "
-        "This is a soft signal — the fund does not meet the threshold for a clear structural laggard designation, "
-        "but warrants monitoring over the next 1-2 evaluation periods."
-    ),
-    required_variables=["laggard_name", "weak_conditions"],
-    severity="warning",
-    priority=24,
-)
-
-CMP_LAGGARD_NONE_V1 = InsightTemplate(
-    template_id="CMP_LAGGARD_NONE_V1",
-    page_type="fund_comparison",
-    insight_code="cmp_laggard_none",
-    trigger_code="cmp_laggard_check",
-    headline_template="No clear laggard in this comparison",
-    body_template=(
-        "None of the compared funds ({fund_names}) shows a sufficient combination of weak signals "
-        "to be flagged as a structural laggard. All funds are within an acceptable range "
-        "on IR, rank movement, and improvement metrics."
-    ),
-    required_variables=["fund_names"],
+FUND_TREND_IMPROVING_V1 = InsightTemplate(
+    template_id="FUND_TREND_IMPROVING_V1",
+    page_type="fund_detail",
+    insight_code="trend",
+    trigger_code="improving",
+    compact_variants=[
+        "**Trend:** improving. Rank, IR slope and recent IR all support the signal.",
+        "**Improvement:** positive 3Y IR slope with rank gain of {rank_improvement_abs} places.",
+        "**Trend signal:** improving across rank and rolling IR.",
+        "**Momentum:** fund is improving under the current rule set.",
+    ],
+    expanded_bullets=[
+        "**Rank change:** +{rank_improvement_abs} places",
+        "**3Y IR slope:** {ir_slope_3y}",
+        "**Improvement metric:** {improvement_metric}",
+        "**Recent vs prior IR:** {latest_6m_avg_rolling_ir} vs {previous_6m_avg_rolling_ir}",
+    ],
+    chip_keys=["rank_improvement_abs", "ir_slope_3y", "improvement_metric"],
+    follow_up_label='Ask "What is driving improvement?"',
+    allowed_conclusion_template="The fund is improving under the current rule set.",
+    forbidden_conclusions=[
+        "buy recommendation", "guaranteed outperformance",
+        "manager skill attribution unless document evidence exists",
+    ],
+    source_tables=["ratio_3year_monthlyret", "selfmade_ranking_snapshot"],
     severity="positive",
+    priority=7,
+)
+
+FUND_TREND_WEAKENING_V1 = InsightTemplate(
+    template_id="FUND_TREND_WEAKENING_V1",
+    page_type="fund_detail",
+    insight_code="trend",
+    trigger_code="weakening",
+    compact_variants=[
+        "**Trend:** weakening. Rank and 3Y IR slope have both moved the wrong way.",
+        "**Weakening signal:** rank slipped {rank_decline_abs} places with negative IR slope.",
+        "**Trend check:** weakening under the current rule set.",
+        "**Momentum:** recent trend is deteriorating.",
+    ],
+    expanded_bullets=[
+        "**Rank decline:** {rank_decline_abs} places",
+        "**3Y IR slope:** {ir_slope_3y}",
+        "**Improvement metric:** {improvement_metric}",
+        "**Recent vs prior IR:** {latest_6m_avg_rolling_ir} vs {previous_6m_avg_rolling_ir}",
+    ],
+    chip_keys=["rank_decline_abs", "ir_slope_3y", "improvement_metric"],
+    follow_up_label="Open rank history and rolling IR",
+    allowed_conclusion_template="The fund is weakening under the current rule set.",
+    source_tables=["ratio_3year_monthlyret", "selfmade_ranking_snapshot"],
+    severity="warning",
+    priority=7,
+)
+
+FUND_TREND_MIXED_V1 = InsightTemplate(
+    template_id="FUND_TREND_MIXED_V1",
+    page_type="fund_detail",
+    insight_code="trend",
+    trigger_code="mixed",
+    compact_variants=[
+        "**Trend:** mixed. Improvement is not yet confirmed across metrics.",
+        "**Mixed signal:** one indicator improved, but others have not confirmed it.",
+        "**Trend check:** inconclusive; review rank and rolling IR together.",
+        "**Momentum:** not clear enough for a strong trend label.",
+    ],
+    expanded_bullets=[
+        "**Positive indicator:** {positive_trend_indicator}",
+        "**Offsetting indicator:** {negative_trend_indicator}",
+        "**Action:** inspect rolling IR and rank movement before concluding.",
+    ],
+    chip_keys=["ir_slope_3y", "rank_delta_6m"],
+    follow_up_label="Open trend diagnostics",
+    allowed_conclusion_template=(
+        "This fund's trend signal is mixed — {positive_trend_indicator}, but {negative_trend_indicator}."
+    ),
+    source_tables=["ratio_3year_monthlyret", "selfmade_ranking_snapshot"],
+    severity="neutral",
+    priority=13,
+)
+
+
+# ── Section 9: Fund Comparison (CMP_*_V1) — compact format, 2026-07-18 ──────
+# Sector overlap, IR-unavailable, and the separate "overall best" templates
+# are dropped (not in the new template set — category-leader below already
+# covers "who's ahead"). CMP_HOLDINGS_OVERLAP_UNAVAILABLE_V1 is the one
+# PRESERVEd fallback (holdings missing for a fund), covering both the 2-fund
+# and multi-fund cases in one template.
+
+CMP_HOLDINGS_OVERLAP_UNAVAILABLE_V1 = InsightTemplate(
+    template_id="CMP_HOLDINGS_OVERLAP_UNAVAILABLE_V1",
+    page_type="fund_comparison",
+    insight_code="holdings_overlap",
+    trigger_code="holdings_missing",
+    compact_variants=[
+        "**Overlap:** holdings data unavailable for one or more compared funds.",
+        "**Holdings overlap:** cannot be computed — portfolio data is missing.",
+        "**Portfolio similarity:** unavailable until holdings data is refreshed.",
+        "**Common book:** overlap analysis needs holdings for every selected fund.",
+    ],
+    expanded_bullets=[
+        "**Status:** portfolio holdings missing for at least one compared fund.",
+        "**Affected:** overlap %, common-holdings count, sector overlap.",
+        "**Next step:** available after the next holdings data refresh.",
+    ],
+    chip_keys=[],
+    follow_up_label="Check Data Quality page",
+    allowed_conclusion_template="Holdings overlap could not be computed — portfolio data is missing for one or more compared funds.",
+    source_tables=["selfmade_portfolio_holding"],
+    severity="neutral",
     priority=25,
 )
 
-# ── Overall best ──────────────────────────────────────────────────────────────
-
-CMP_BEST_CLEAR_V1 = InsightTemplate(
-    template_id="CMP_BEST_CLEAR_V1",
+CMP_HOLDINGS_OVERLAP_TWO_FUNDS_V1 = InsightTemplate(
+    template_id="CMP_HOLDINGS_OVERLAP_TWO_FUNDS_V1",
     page_type="fund_comparison",
-    insight_code="cmp_best_clear",
-    trigger_code="cmp_best_check",
-    headline_template="Overall research candidate: {winner_name}",
-    body_template=(
-        "{winner_name} leads this comparison in {category} with a composite score gap "
-        "of {score_gap:.1f} points and wins on {metrics_won_count} of the evaluated metrics "
-        "(IR, rank, improvement, expense efficiency). "
-        "This makes it a structurally stronger research candidate relative to the compared peers — "
-        "a structural signal for deeper due diligence, not a directional trading cue."
+    insight_code="holdings_overlap",
+    trigger_code="two_funds",
+    compact_variants=[
+        "**Overlap:** {weighted_overlap_pct}% weighted overlap across {common_holdings_count} common holdings.",
+        "**Holdings overlap:** {weighted_overlap_pct}% between {fund_a} and {fund_b}.",
+        "**Portfolio similarity:** {common_holdings_count} common holdings; {weighted_overlap_pct}% weighted overlap.",
+        "**Common book:** {fund_a} and {fund_b} overlap by {weighted_overlap_pct}%.",
+    ],
+    expanded_bullets=[
+        "**Common holdings:** {common_holdings_count}",
+        "**Weighted overlap:** {weighted_overlap_pct}%",
+        "**Jaccard overlap:** {jaccard_overlap_pct}%",
+        "**Overlap band:** {overlap_band}",
+    ],
+    chip_keys=["weighted_overlap_pct", "common_holdings_count", "overlap_band"],
+    follow_up_label="Open common holdings table",
+    allowed_conclusion_template=(
+        "{fund_a} and {fund_b} share {weighted_overlap_pct}% weighted portfolio overlap "
+        "({common_holdings_count} common holdings) — {overlap_band} overlap."
     ),
-    required_variables=["winner_name", "category", "score_gap", "metrics_won_count"],
+    source_tables=["selfmade_portfolio_holding"],
+    severity="neutral",
+    priority=10,
+)
+
+CMP_HOLDINGS_OVERLAP_MULTI_FUND_V1 = InsightTemplate(
+    template_id="CMP_HOLDINGS_OVERLAP_MULTI_FUND_V1",
+    page_type="fund_comparison",
+    insight_code="holdings_overlap",
+    trigger_code="multi_fund",
+    compact_variants=[
+        "**Average overlap:** {avg_pairwise_overlap_pct}% across compared funds.",
+        "**Portfolio similarity:** average pairwise overlap is {avg_pairwise_overlap_pct}%.",
+        "**Overlap range:** {min_pair_overlap_pct}% to {max_pair_overlap_pct}% across fund pairs.",
+        "**Common holdings:** {common_to_all_count} holdings are shared by all selected funds.",
+    ],
+    expanded_bullets=[
+        "**Average pairwise overlap:** {avg_pairwise_overlap_pct}%",
+        "**Highest overlap:** {max_pair_name} at {max_pair_overlap_pct}%",
+        "**Lowest overlap:** {min_pair_name} at {min_pair_overlap_pct}%",
+        "**Common to all:** {common_to_all_count} holdings",
+    ],
+    chip_keys=["avg_pairwise_overlap_pct", "common_to_all_count"],
+    follow_up_label="Open overlap matrix",
+    allowed_conclusion_template=(
+        "The compared funds have an average pairwise weighted overlap of {avg_pairwise_overlap_pct}%, "
+        "ranging from {min_pair_overlap_pct}% to {max_pair_overlap_pct}%."
+    ),
+    source_tables=["selfmade_portfolio_holding"],
+    severity="neutral",
+    priority=10,
+)
+
+CMP_CLEAR_LEADER_V1 = InsightTemplate(
+    template_id="CMP_CLEAR_LEADER_V1",
+    page_type="fund_comparison",
+    insight_code="clear_leader",
+    trigger_code="leader_found",
+    compact_variants=[
+        "**Clear leader:** {leader_fund} leads under the current rule set.",
+        "**Rule-ranked leader:** {leader_fund} is ahead by {score_gap} score points.",
+        "**Comparison winner:** {leader_fund} leads on {metric_win_summary}.",
+        "**Stronger candidate:** {leader_fund} leads the comparison today.",
+    ],
+    expanded_bullets=[
+        "**Score gap:** {score_gap} points",
+        "**Metric wins:** {metric_win_summary}",
+        "**Current rank:** {leader_current_rank}",
+        "**Category:** {category}",
+    ],
+    chip_keys=["leader_fund", "score_gap", "category"],
+    follow_up_label="Open detailed metric comparison",
+    allowed_conclusion_template=(
+        "{leader_fund} is the current rule-ranked leader of this comparison in {category}, "
+        "ahead by {score_gap} composite-score points and winning on {metric_win_summary}."
+    ),
+    source_tables=["selfmade_scheme_metrics", "selfmade_ranking_snapshot"],
     severity="positive",
     priority=3,
 )
 
-CMP_BEST_NO_CLEAR_WINNER_V1 = InsightTemplate(
-    template_id="CMP_BEST_NO_CLEAR_WINNER_V1",
+CMP_NO_CLEAR_LEADER_V1 = InsightTemplate(
+    template_id="CMP_NO_CLEAR_LEADER_V1",
     page_type="fund_comparison",
-    insight_code="cmp_best_no_winner",
-    trigger_code="cmp_best_check",
-    headline_template="No clear winner in this comparison",
-    body_template=(
-        "The compared funds ({fund_names}) are structurally close across evaluated metrics. "
-        "Reason: {reason}. "
-        "No single fund dominates across IR, rank, improvement, and expense dimensions. "
-        "This comparison does not surface a clear structural improvement signal at this time."
+    insight_code="clear_leader",
+    trigger_code="no_leader",
+    compact_variants=[
+        "**No clear leader:** score gap is small and metrics are split.",
+        "**Close comparison:** no fund is clearly ahead under the current rule set.",
+        "**Mixed leadership:** different funds lead on different metrics.",
+        "**No single winner:** review metric drivers before deciding research priority.",
+    ],
+    expanded_bullets=[
+        "**Top score gap:** {score_gap} points",
+        "**Leader on 3Y IR:** {ir_leader}",
+        "**Leader on trend:** {trend_leader}",
+        "**Leader on overlap differentiation:** {differentiated_fund}",
+    ],
+    chip_keys=["score_gap", "ir_leader", "trend_leader"],
+    follow_up_label="Open metric-by-metric comparison",
+    allowed_conclusion_template=(
+        "No fund clearly leads this comparison — the score gap ({score_gap} points) is narrow "
+        "and different funds lead on different metrics (IR: {ir_leader}, trend: {trend_leader})."
     ),
-    required_variables=["fund_names", "reason"],
+    source_tables=["selfmade_scheme_metrics", "selfmade_ranking_snapshot"],
     severity="neutral",
     priority=4,
+)
+
+CMP_BETTER_3Y_IR_V1 = InsightTemplate(
+    template_id="CMP_BETTER_3Y_IR_V1",
+    page_type="fund_comparison",
+    insight_code="better_3y_ir",
+    trigger_code="ir_leader_found",
+    compact_variants=[
+        "**3Y IR leader:** {ir_leader} at {leader_ir_3y}.",
+        "**Best 3Y IR:** {ir_leader} leads with {leader_ir_3y}.",
+        "**Risk-adjusted leader:** {ir_leader} has the strongest 3Y IR.",
+        "**3Y IR comparison:** {ir_leader} is ahead of peers.",
+    ],
+    expanded_bullets=[
+        "**Leader:** {ir_leader}",
+        "**3Y IR:** {leader_ir_3y}",
+        "**Next best:** {second_fund} at {second_ir_3y}",
+        "**Gap:** {ir_gap}",
+    ],
+    chip_keys=["ir_leader", "leader_ir_3y", "ir_gap"],
+    follow_up_label="Open 3Y IR and rolling IR history",
+    allowed_conclusion_template=(
+        "{ir_leader} has the strongest 3-year information ratio in this comparison ({leader_ir_3y}, "
+        "a gap of {ir_gap} over the next-best fund)."
+    ),
+    source_tables=["selfmade_scheme_metrics"],
+    severity="positive",
+    priority=16,
+)
+
+CMP_3Y_IR_CONFLICT_V1 = InsightTemplate(
+    template_id="CMP_3Y_IR_CONFLICT_V1",
+    page_type="fund_comparison",
+    insight_code="better_3y_ir",
+    trigger_code="ir_trend_conflict",
+    compact_variants=[
+        "**Split signal:** {ir_leader} leads 3Y IR, but {trend_leader} has better recent improvement.",
+        "**IR vs trend:** {ir_leader} wins 3Y IR; {trend_leader} wins improvement.",
+        "**Mixed comparison:** long-term IR and recent trend point to different funds.",
+        "**Not one-sided:** {ir_leader} has stronger 3Y IR; {trend_leader} is improving faster.",
+    ],
+    expanded_bullets=[
+        "**3Y IR leader:** {ir_leader} at {leader_ir_3y}",
+        "**Trend leader:** {trend_leader}",
+        "**Trend reason:** {trend_reason}",
+        "**Action:** compare rolling IR before drawing a conclusion.",
+    ],
+    chip_keys=["ir_leader", "trend_leader", "leader_ir_3y"],
+    follow_up_label="Open rolling IR and trend comparison",
+    allowed_conclusion_template=(
+        "{ir_leader} leads on 3-year information ratio ({leader_ir_3y}), but {trend_leader} shows "
+        "stronger recent improvement ({trend_reason}) — these point to different funds, not one clear winner."
+    ),
+    source_tables=["selfmade_scheme_metrics"],
+    severity="neutral",
+    priority=17,
+)
+
+CMP_RECENT_IMPROVEMENT_LEADER_V1 = InsightTemplate(
+    template_id="CMP_RECENT_IMPROVEMENT_LEADER_V1",
+    page_type="fund_comparison",
+    insight_code="recent_improvement",
+    trigger_code="improvement_leader_found",
+    compact_variants=[
+        "**Improvement leader:** {trend_leader} has the strongest recent improvement signal.",
+        "**Recent trend:** {trend_leader} leads on rank movement and IR slope.",
+        "**Momentum leader:** {trend_leader} is improving fastest among the compared funds.",
+        "**Trend edge:** {trend_leader} has the best recent improvement score.",
+    ],
+    expanded_bullets=[
+        "**Rank change:** +{rank_improvement_abs} places",
+        "**3Y IR slope:** {ir_slope_3y}",
+        "**Improvement metric:** {improvement_metric}",
+        "**Recent IR change:** {recent_ir_change}",
+    ],
+    chip_keys=["trend_leader", "rank_improvement_abs", "ir_slope_3y"],
+    follow_up_label="Open improvement decomposition",
+    allowed_conclusion_template=(
+        "{trend_leader} shows the strongest recent-improvement signal in this comparison "
+        "(rank +{rank_improvement_abs}, 3Y IR slope {ir_slope_3y})."
+    ),
+    source_tables=["ratio_3year_monthlyret", "selfmade_ranking_snapshot"],
+    severity="positive",
+    priority=19,
+)
+
+CMP_LAGGARD_V1 = InsightTemplate(
+    template_id="CMP_LAGGARD_V1",
+    page_type="fund_comparison",
+    insight_code="laggard",
+    trigger_code="laggard_found",
+    compact_variants=[
+        "**Laggard:** {laggard_fund} trails on key risk-adjusted metrics.",
+        "**Weakest profile:** {laggard_fund} has the lowest 3Y IR and weaker trend.",
+        "**Comparison caution:** {laggard_fund} is behind on risk-adjusted performance.",
+        "**Lagging signal:** {laggard_fund} trails peers on the current metric set.",
+    ],
+    expanded_bullets=[
+        "**3Y IR:** {laggard_ir_3y}",
+        "**3Y IR percentile:** {laggard_ir_percentile}th",
+        "**IR slope:** {laggard_ir_slope_3y}",
+        "**Rank change:** {laggard_rank_delta}",
+    ],
+    chip_keys=["laggard_fund", "laggard_ir_3y", "laggard_ir_slope_3y"],
+    follow_up_label="Open laggard diagnostics",
+    allowed_conclusion_template=(
+        "{laggard_fund} is the relative laggard in this comparison — 3Y IR {laggard_ir_3y}, "
+        "IR slope {laggard_ir_slope_3y}, rank change {laggard_rank_delta}."
+    ),
+    source_tables=["selfmade_scheme_metrics", "selfmade_ranking_snapshot"],
+    severity="warning",
+    priority=23,
 )
 
 

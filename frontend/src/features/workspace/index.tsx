@@ -142,6 +142,12 @@ function CustomTooltip({ active, payload }: {
   )
 }
 
+// AI Workspace / Lens cards are client-side generated (not backend insight_
+// snapshot rows) and out of scope for the 2026-07-18 compact-card migration
+// (Section 1-6 covers AIW/CAT/FUND/CMP/RULE/CHAT, not the Lens quadrant
+// explainer). Kept as its own lightweight renderer rather than adopting the
+// shared CompactInsightCard's expand/collapse + chips, since these cards
+// carry a single explanatory paragraph, not a compact+bullets structure.
 function InsightCard({ card }: { card: InsightCardData }) {
   const colorMap: Record<string, string> = {
     positive: "border-green-200 bg-green-50",
@@ -151,8 +157,8 @@ function InsightCard({ card }: { card: InsightCardData }) {
   }
   return (
     <div className={cn("rounded-lg border p-3 text-xs", colorMap[card.severity] ?? colorMap.neutral)}>
-      <p className="font-semibold text-gray-800 leading-snug mb-1">{card.headline}</p>
-      <p className="text-gray-600 leading-relaxed">{card.body_text}</p>
+      <p className="font-semibold text-gray-800 leading-snug mb-1">{card.compact_text}</p>
+      <p className="text-gray-600 leading-relaxed">{card.expanded_bullets.join(" ")}</p>
     </div>
   )
 }
@@ -169,13 +175,15 @@ function buildClientInsights(
     insight_code: "lens_quadrant_explainer",
     severity: "neutral",
     priority: 1,
-    headline: `Axis guide: ${scatter.x_label} (x) vs ${scatter.y_label} (y) — ${activeCategory}`,
-    body_text:
-      `Each point is one fund in ${activeCategory}. ` +
-      `X-axis: ${scatter.x_label}${scatter.x_description ? " — " + scatter.x_description : ""}. ` +
-      `Y-axis: ${scatter.y_label}${scatter.y_description ? " — " + scatter.y_description : ""}. ` +
+    compact_text: `**Axis guide:** ${scatter.x_label} (x) vs ${scatter.y_label} (y) — ${activeCategory}`,
+    expanded_bullets: [
+      `Each point is one fund in ${activeCategory}.`,
+      `X-axis: ${scatter.x_label}${scatter.x_description ? " — " + scatter.x_description : ""}.`,
+      `Y-axis: ${scatter.y_label}${scatter.y_description ? " — " + scatter.y_description : ""}.`,
       `Quadrant thresholds: x splits at the category median (${scatter.x_label} = ${scatter.x_threshold.toFixed(3)}); ` +
       `y splits at ${scatter.y_threshold.toFixed(4)} (positive = structurally improving, negative = declining).`,
+    ],
+    chips: {},
     facts_json: {},
     generated_by: "deterministic-template",
     prompt_tokens: 0,
@@ -199,10 +207,12 @@ function buildClientInsights(
       insight_code: "lens_candidates_found",
       severity: "positive",
       priority: 5,
-      headline: `${count} research candidate(s) — ${qLabel} quadrant`,
-      body_text:
-        `${count} fund(s) in ${activeCategory} appear in the ${qLabel} quadrant. ` +
+      compact_text: `**${count} research candidate(s)** — ${qLabel} quadrant`,
+      expanded_bullets: [
+        `${count} fund(s) in ${activeCategory} appear in the ${qLabel} quadrant.`,
         `Top by ${scatter.x_label}: ${topFunds}.`,
+      ],
+      chips: {},
       facts_json: {},
       generated_by: "deterministic-template",
       prompt_tokens: 0,
@@ -214,10 +224,12 @@ function buildClientInsights(
       insight_code: "lens_candidates_none",
       severity: "neutral",
       priority: 10,
-      headline: `No funds in the ${qLabel} quadrant — ${activeCategory}`,
-      body_text:
-        `The ${qLabel} quadrant returned zero funds in ${activeCategory}. ` +
+      compact_text: `**No funds** in the ${qLabel} quadrant — ${activeCategory}`,
+      expanded_bullets: [
+        `The ${qLabel} quadrant returned zero funds in ${activeCategory}.`,
         `Consider loosening the category filter or selecting a different quadrant.`,
+      ],
+      chips: {},
       facts_json: {},
       generated_by: "deterministic-template",
       prompt_tokens: 0,

@@ -85,6 +85,37 @@ INTENTS = {
         "tools": [],
         "description": "Navigate to a specific screen",
     },
+    # ── Merged from research_chat (2026-07-17) ─────────────────────────────
+    "scheme_filter": {
+        "keywords": ["list schemes", "list of schemes", "which schemes", "how many schemes",
+                     "schemes with aum", "aum over", "aum above", "aum under", "aum below",
+                     "schemes launched", "launched before", "launched after",
+                     "schemes per amc", "group by amc", "schemes managed by",
+                     "how many funds does", "list funds from"],
+        "tools": ["filter_schemes"],
+        "description": "General scheme universe browse — filter by AMC/category/AUM/launch date, count, or group by AMC",
+    },
+    "holdings_lookup": {
+        "keywords": ["holdings of", "top holdings", "portfolio of", "what does",
+                     "concentration", "herfindahl", "top 5 holdings", "top 10 holdings",
+                     "how many holdings", "large cap holdings of", "mid cap holdings of",
+                     "small cap holdings of", "holdings breakdown"],
+        "tools": ["get_holdings"],
+        "description": "Holdings, holding count, or concentration for a single fund",
+    },
+    "overlap_search": {
+        "keywords": ["overlap between", "overlap with", "common holdings",
+                     "companies in common", "shared holdings", "how much overlap"],
+        "tools": ["compare_holdings_overlap"],
+        "description": "Portfolio overlap between two funds",
+    },
+    "company_exposure": {
+        "keywords": ["which funds hold", "who holds", "exposure to", "schemes holding",
+                     "funds holding", "how many schemes hold", "hold more than",
+                     "hold over", "exposure across funds"],
+        "tools": ["get_company_exposure"],
+        "description": "Cross-fund exposure to a single company",
+    },
 }
 
 # ── Recommendation guard ──────────────────────────────────────────────────────
@@ -151,28 +182,52 @@ Classify the user query into exactly one intent from this list:
   rule_help         — user wants to understand scoring rules/methodology
   report            — user wants to generate or download a report
   navigation        — user wants to navigate to a screen or page
+  scheme_filter     — user wants to browse/count/group the general scheme universe by AMC, category, AUM, or launch date (NOT a ranked/scored list — that's ranking_explain)
+  holdings_lookup   — user wants a single fund's holdings, holding count, or concentration
+  overlap_search    — user wants portfolio overlap between two named funds
+  company_exposure  — user wants which funds/schemes hold a named company, across the fund universe
   recommendation_request — user is asking for investment advice, buy/sell/switch, or suitability
 
 Return ONLY a JSON object (no markdown) with this exact shape:
 {
-  "intent": "<one of the 8 above>",
+  "intent": "<one of the 12 above>",
   "tools": ["<tool1>", "<tool2>"],
   "params": {"<key>": "<value>"}
 }
 
 Allowed tools: get_category_rankings, get_fund_metrics, get_rank_history, get_growth_of_10k,
 get_rankings_explain, get_rankings_what_changed, compare_funds, get_holdings,
-get_current_rules, search_documents
+get_current_rules, search_documents, filter_schemes, get_cap_exposure,
+get_company_exposure, compare_holdings_overlap
 
 IMPORTANT: classify as recommendation_request ONLY if the user clearly asks what to buy/sell/switch.
 "What are the top funds?" → ranking_explain (NOT recommendation_request).
 "Should I invest in HDFC Top 100?" → recommendation_request.
 "Compare HDFC vs Mirae metrics" → compare.
 "What drives HDFC's ranking?" → ranking_explain with tool get_rankings_explain.
+"List large cap schemes with AUM over 5000 crore" → scheme_filter (NOT ranking_explain — this is
+  an unranked universe filter, not a request for the scored/ranked list).
+"How many schemes does HDFC run?" → scheme_filter.
+"Top holdings of Mirae Asset Large Cap" → holdings_lookup.
+"Overlap between HDFC Top 100 and Mirae Asset Large Cap" → overlap_search.
+"Which funds hold more than 5% in Reliance Industries?" → company_exposure.
 
-For fund_metrics and ranking_explain, extract the schemecode if a numeric code is mentioned,
-otherwise leave params empty and let the router resolve from context.
+For fund_metrics, holdings_lookup, and ranking_explain, extract the schemecode if a numeric
+code is mentioned; otherwise set params.scheme_identifier to the fund name text as written
+and let the tool resolve it, or leave params empty and let the router resolve from context.
 For compare, set params.schemecodes to a list of integer scheme codes if mentioned.
+For overlap_search, set params.scheme_identifier_a and params.scheme_identifier_b to the two
+fund names as written (or schemecode_a/schemecode_b if numeric codes are given).
+For company_exposure, set params.company_name to the company as written, and params.min_weight_pct
+to a number if the user gives a threshold (e.g. "more than 5%" → 5).
+For scheme_filter, set params.filters to an object with any of: amc, category, sub_category,
+status, aum_min, aum_max (crores), launch_date_before, launch_date_after (ISO date). Set
+params.group_by="amc" if the user wants counts per AMC, params.count_only=true if they only
+want a total count, otherwise omit both to return the matching rows.
+IMPORTANT: scheme_filter's "category" is a plain fund-type substring like "Large Cap",
+"Mid Cap", "Small Cap", "ELSS", "Debt" — it is matched against the scheme master's own
+category/sub_category text. Do NOT use the "Equity — Large Cap" ranking-category naming
+here (that belongs only to get_category_rankings/get_rankings_explain/get_rankings_what_changed).
 For get_category_rankings, set params.category to one of:
   "Equity — Large Cap", "Equity — Mid Cap", "Equity — Small Cap"
 """
@@ -224,6 +279,12 @@ Guidelines per intent:
   document_search  → result_component_type="text", quote relevant excerpt verbatim
   rule_help        → result_component_type="table", columns=[Component, Weight, Direction]
   report/navigation → result_component_type="text"
+  scheme_filter    → result_component_type="table", columns=[Scheme, AMC, Category, AUM (Cr), Status]
+                     (or [AMC, Scheme Count] if grouped). This is the unranked scheme universe —
+                     never call it "ranked" or "top" funds.
+  holdings_lookup  → result_component_type="table", columns=[Company, Sector, Market Cap, Weight %]
+  overlap_search   → result_component_type="table", columns=[Company, Weight — Fund A, Weight — Fund B]
+  company_exposure → result_component_type="table", columns=[Scheme, Weight %]
 
 Never include "recommendation", "buy", or "sell" anywhere in the answer.
 """
@@ -327,6 +388,9 @@ def _classify_keywords(message: str) -> dict[str, Any]:
 
 
 def _extract_keyword_params(message: str, intent: str) -> dict:
+    if intent in ("scheme_filter", "holdings_lookup", "overlap_search", "company_exposure"):
+        return _extract_new_intent_params(message, intent)
+
     msg_lower = message.lower()
     params: dict = {}
     if "mid cap" in msg_lower or "midcap" in msg_lower:
@@ -336,6 +400,70 @@ def _extract_keyword_params(message: str, intent: str) -> dict:
     else:
         params["category"] = "Equity — Large Cap"
     return params
+
+
+def _extract_new_intent_params(message: str, intent: str) -> dict:
+    """Best-effort keyword-tier param extraction for the intents merged in from
+    research_chat. Deliberately crude — same bar as the rest of this fallback
+    tier (e.g. `compare` doesn't extract schemecodes by keyword either); the
+    LLM tier (_CLASSIFY_SYSTEM) does the real extraction when a key is set."""
+    from app.ai.tools import AMC_CODE_TO_NAME
+
+    msg_lower = message.lower()
+
+    if intent == "scheme_filter":
+        filters: dict = {}
+        for name in AMC_CODE_TO_NAME.values():
+            token = name.replace(" MF", "").lower()
+            if token in msg_lower:
+                filters["amc"] = token
+                break
+        if "mid cap" in msg_lower or "midcap" in msg_lower:
+            filters["category"] = "Mid Cap"
+        elif "small cap" in msg_lower or "smallcap" in msg_lower:
+            filters["category"] = "Small Cap"
+        elif "large cap" in msg_lower or "largecap" in msg_lower:
+            filters["category"] = "Large Cap"
+        m = re.search(r"aum (?:over|above|>|greater than)\s*(?:rs\.?|₹)?\s*([\d,]+)", msg_lower)
+        if m:
+            filters["aum_min"] = float(m.group(1).replace(",", ""))
+        m = re.search(r"aum (?:under|below|<|less than)\s*(?:rs\.?|₹)?\s*([\d,]+)", msg_lower)
+        if m:
+            filters["aum_max"] = float(m.group(1).replace(",", ""))
+        params: dict = {"filters": filters}
+        if "per amc" in msg_lower or "group by amc" in msg_lower or "how many schemes does" in msg_lower:
+            params["group_by"] = "amc"
+        elif msg_lower.startswith("how many"):
+            params["count_only"] = True
+        return params
+
+    if intent == "holdings_lookup":
+        m = re.search(r"(?:holdings|portfolio)\s+of\s+(.+?)(?:\?|$)", message, re.IGNORECASE)
+        params = {"scheme_identifier": m.group(1).strip() if m else message.strip()}
+        if "concentration" in msg_lower or "herfindahl" in msg_lower:
+            params["include_concentration"] = True
+        if "large cap" in msg_lower:
+            params["cap_type"] = "Large Cap"
+        elif "mid cap" in msg_lower:
+            params["cap_type"] = "Mid Cap"
+        elif "small cap" in msg_lower:
+            params["cap_type"] = "Small Cap"
+        return params
+
+    if intent == "overlap_search":
+        m = re.search(r"overlap (?:between|with)\s+(.+?)\s+(?:and|vs\.?|versus)\s+(.+?)(?:\?|$)", message, re.IGNORECASE)
+        if m:
+            return {"scheme_identifier_a": m.group(1).strip(), "scheme_identifier_b": m.group(2).strip()}
+        return {}
+
+    if intent == "company_exposure":
+        m = re.search(r"(?:hold(?:s|ing)?|exposure to|holding of)\s+(?:more than|over|>)?\s*([\d.]+)\s*%?\s*(?:in\s+)?(.+?)(?:\?|$)", message, re.IGNORECASE)
+        if m and m.group(1):
+            return {"company_name": m.group(2).strip(), "min_weight_pct": float(m.group(1))}
+        m = re.search(r"(?:hold[s]?|holding|exposure to|invested in)\s+(.+?)(?:\?|$)", message, re.IGNORECASE)
+        return {"company_name": m.group(1).strip()} if m else {}
+
+    return {}
 
 
 def _all_tools() -> set[str]:
@@ -359,9 +487,16 @@ def generate_response(
     message: str,
     intent: str,
     tool_results: list[dict[str, Any]],
+    follow_up_payload: dict | None = None,
 ) -> dict[str, Any]:
     """
     Generate a structured response dict from tool results.
+
+    follow_up_payload: the canonical follow-up context (see
+    app.insights.models.FollowUpPayload) when this request originated from a
+    user clicking a follow-up action on a deterministic insight card. When
+    present, its allowed_conclusion is passed to the LLM as a hard
+    constraint — see LLM rule in the compact-templates migration.
 
     Returns a dict with: answer, result_component_type, table_columns,
     table_rows, chart_type, chart_data, source_tables, data_confidence,
@@ -392,7 +527,7 @@ def generate_response(
     source_tables = _extract_source_tables(tool_results)
 
     if llm_available:
-        structured = _respond_llm(message, intent, tool_results)
+        structured = _respond_llm(message, intent, tool_results, follow_up_payload)
         if structured:
             structured["data_confidence"] = data_confidence
             structured["source_tables"] = source_tables or structured.get("source_tables", [])
@@ -407,10 +542,38 @@ def generate_response(
     return result
 
 
+def _followup_constraint_block(follow_up_payload: dict | None) -> str:
+    """
+    LLM rule (compact-templates migration): when answering a follow-up from
+    a deterministic insight card, the model may add detail or context, but
+    the conclusion itself must stay consistent with what the deterministic
+    template already established — it must NOT contradict or replace
+    allowed_conclusion. Same pattern as the recommendation-reframe backstop
+    above: a hard instruction block, not a suggestion.
+    """
+    if not follow_up_payload or not follow_up_payload.get("allowed_conclusion"):
+        return ""
+    allowed = follow_up_payload["allowed_conclusion"]
+    forbidden = follow_up_payload.get("forbidden_conclusions") or []
+    forbidden_str = "; ".join(forbidden) if forbidden else "none specified"
+    return f"""
+
+FOLLOW-UP CONSTRAINT — this overrides stylistic preference, not the compliance backstop above:
+  This question follows up on a deterministic insight card. That card already established
+  this conclusion, computed by pure backend logic, not by you:
+    "{allowed}"
+  You MAY add detail, context, or supporting figures from the tool results. You MUST NOT
+  contradict, soften, reverse, or replace this conclusion — do not argue the fund is actually
+  improving if the card said it's weakening, or vice versa. Also do not draw these forbidden
+  conclusions: {forbidden_str}.
+"""
+
+
 def _respond_llm(
     message: str,
     intent: str,
     tool_results: list[dict[str, Any]],
+    follow_up_payload: dict | None = None,
 ) -> dict[str, Any] | None:
     context = "\n\n".join(
         f"Tool result {i + 1}:\n{json.dumps(r, default=str)[:1200]}"
@@ -419,15 +582,16 @@ def _respond_llm(
     user_content = (
         f"User query: {message}\nIntent: {intent}\n\nData from backend tools:\n{context}"
     )
+    system_prompt = _RESPOND_SYSTEM + _followup_constraint_block(follow_up_payload)
 
     if settings.openai_api_key:
-        return _respond_openai(user_content)
+        return _respond_openai(user_content, system_prompt)
     if settings.anthropic_api_key:
-        return _respond_anthropic(user_content)
+        return _respond_anthropic(user_content, system_prompt)
     return None
 
 
-def _respond_openai(user_content: str) -> dict | None:
+def _respond_openai(user_content: str, system_prompt: str = _RESPOND_SYSTEM) -> dict | None:
     try:
         import openai
         client = openai.OpenAI(api_key=settings.openai_api_key)
@@ -436,7 +600,7 @@ def _respond_openai(user_content: str) -> dict | None:
             max_tokens=800,
             temperature=0.2,
             messages=[
-                {"role": "system", "content": _RESPOND_SYSTEM},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
         )
@@ -446,14 +610,14 @@ def _respond_openai(user_content: str) -> dict | None:
         return None
 
 
-def _respond_anthropic(user_content: str) -> dict | None:
+def _respond_anthropic(user_content: str, system_prompt: str = _RESPOND_SYSTEM) -> dict | None:
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=800,
-            system=_RESPOND_SYSTEM,
+            system=system_prompt,
             messages=[{"role": "user", "content": user_content}],
         )
         raw = resp.content[0].text.strip()
@@ -622,6 +786,95 @@ def _respond_template(
                 "Compare with another fund",
             ],
         }
+
+    if intent == "scheme_filter" and ("schemes" in result or "groups" in result or "count" in result):
+        import copy
+        tpl = copy.deepcopy(CHAT_DIRECT_ANSWER_WITH_TABLE_V1)
+        if "count" in result:
+            tpl["answer"] = f"{result['count']} scheme(s) match (source: {result.get('source_table', 'altstreet_scheme_master')})."
+            tpl["table_columns"] = ["Count"]
+            tpl["table_rows"] = [[result["count"]]]
+        elif "groups" in result:
+            tpl["answer"] = f"Schemes grouped by AMC ({result.get('amc_count', 0)} AMCs)."
+            tpl["table_columns"] = ["AMC", "Scheme Count"]
+            tpl["table_rows"] = [[g["amc"], g["scheme_count"]] for g in result["groups"]]
+        else:
+            tpl["answer"] = (
+                f"Found {result.get('result_count', 0)} scheme(s) "
+                f"(source: {result.get('source_table', 'altstreet_scheme_master')}). "
+                "This is the general scheme universe, not a ranked/scored list."
+            )
+            tpl["table_columns"] = ["Scheme", "AMC", "Category", "AUM (Cr)", "Status"]
+            tpl["table_rows"] = [
+                [s["scheme_name"], s["amc"], s["sub_category"] or s["category"],
+                 s["aum_crores"], s["status"]]
+                for s in result["schemes"]
+            ]
+        tpl["suggested_next_actions"] = [
+            "Show holdings of one of these funds",
+            "Show ranked funds in Equity — Large Cap",
+        ]
+        return tpl
+
+    if intent == "holdings_lookup" and "holdings" in result:
+        import copy
+        tpl = copy.deepcopy(CHAT_DIRECT_ANSWER_WITH_TABLE_V1)
+        conc = result.get("concentration")
+        conc_note = f" Top-5 concentration: {conc['top_5_pct']:.1f}%." if conc else ""
+        tpl["answer"] = (
+            f"Holdings for **{result.get('fund_name', '')}** "
+            f"(source: selfmade_portfolio_holding, as_of: {result.get('as_of_date', 'N/A')}). "
+            f"{result.get('holding_count', len(result['holdings']))} holding(s) shown.{conc_note}"
+        )
+        tpl["table_columns"] = ["Company", "Sector", "Market Cap", "Weight %"]
+        tpl["table_rows"] = [
+            [h["company"], h["sector"], h["market_cap"], round(h["weight_pct"], 2)]
+            for h in result["holdings"]
+        ]
+        tpl["suggested_next_actions"] = [
+            "Compare this fund's overlap with another fund",
+            "Show this fund's metrics",
+        ]
+        return tpl
+
+    if intent == "overlap_search" and "common_holdings" in result:
+        import copy
+        tpl = copy.deepcopy(CHAT_DIRECT_ANSWER_WITH_TABLE_V1)
+        tpl["answer"] = (
+            f"Overlap between **{result['fund_a']['fund_name']}** and **{result['fund_b']['fund_name']}**: "
+            f"{result['common_holdings_count']} common holdings, "
+            f"{result['overlap_by_weight_pct']:.1f}% by weight, "
+            f"{result['overlap_by_count_pct']:.1f}% by count "
+            "(source: selfmade_portfolio_holding)."
+        )
+        tpl["table_columns"] = ["Company", f"Weight — {result['fund_a']['fund_name']}", f"Weight — {result['fund_b']['fund_name']}"]
+        tpl["table_rows"] = [
+            [c["company"], round(c["weight_a"], 2), round(c["weight_b"], 2)]
+            for c in result["common_holdings"]
+        ]
+        tpl["suggested_next_actions"] = [
+            "Show full holdings of either fund",
+            "Compare these funds' metrics",
+        ]
+        return tpl
+
+    if intent == "company_exposure" and "schemes" in result and "company_name" in result:
+        import copy
+        tpl = copy.deepcopy(CHAT_DIRECT_ANSWER_WITH_TABLE_V1)
+        tpl["answer"] = (
+            f"{result['scheme_count']} scheme(s) hold **{result['company_name']}** "
+            f"(source: altstreet_scheme_holdings)."
+        )
+        tpl["table_columns"] = ["Scheme", "Weight %"]
+        tpl["table_rows"] = [
+            [s["fund_name"], round(s["weight_pct"], 2) if s["weight_pct"] is not None else "—"]
+            for s in result["schemes"][:30]
+        ]
+        tpl["suggested_next_actions"] = [
+            "Filter to a higher weight threshold",
+            "Show holdings of one of these funds",
+        ]
+        return tpl
 
     return {
         "answer": "Query processed. Data retrieved from backend tools — see structured results.",

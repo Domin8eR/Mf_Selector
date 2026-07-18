@@ -139,10 +139,12 @@ def test_category_insights_v1_template_rendered(client):
 
 
 def test_category_insights_no_forbidden_language(client):
+    """compact_text/expanded_bullets replaced headline/body_text in the
+    2026-07-18 compact-card migration."""
     FORBIDDEN = {"buy", "sell", "recommend", "top pick", "best fund", "switch"}
     r = client.get(f"/insights/category-rankings?category={CAT}")
     for card in r.json()["cards"]:
-        blob = (card["headline"] + " " + card["body_text"]).lower()
+        blob = (card["compact_text"] + " " + " ".join(card["expanded_bullets"])).lower()
         found = [w for w in FORBIDDEN if w in blob]
         assert not found, (
             f"Card '{card['template_id']}' contains forbidden words: {found}"

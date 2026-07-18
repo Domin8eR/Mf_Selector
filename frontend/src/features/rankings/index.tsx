@@ -787,7 +787,16 @@ export default function CategoryRankingsPage() {
 
         <button
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-600 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition"
-          onClick={() => navigate("/research-chat")}
+          onClick={() => {
+            const params = new URLSearchParams({
+              from: "rankings",
+              category,
+              facts_json: JSON.stringify({ category, rule_set: "Client Default v1.0" }),
+              required_tools: JSON.stringify(["get_category_rankings", "get_rankings_explain"]),
+              forbidden_phrases: JSON.stringify(["recommend", "buy", "sell", "should I invest", "best fund"]),
+            })
+            navigate(`/chat?${params.toString()}`)
+          }}
         >
           <MessageSquare className="h-3.5 w-3.5" />
           Ask this table

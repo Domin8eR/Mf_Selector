@@ -62,11 +62,13 @@ CHAT_NO_TOOL_RESULT_V1: dict = {
 }
 
 CHAT_NO_DOCUMENT_EVIDENCE_V1: dict = {
+    # Compact-card format (2026-07-18 migration, Section 6): one compact
+    # sentence + bullets, not a paragraph block.
     "answer": (
-        "No factsheet or scheme information documents have been extracted for "
-        "this fund yet. Document evidence is available for the top-30 ranked "
-        "funds per category. Try asking about a ranked fund, or ask for the "
-        "fund's quantitative metrics instead."
+        "**No document evidence:** answer is limited to metrics and holdings data.\n\n"
+        "• **Available:** metrics, rankings and holdings.\n"
+        "• **Not available:** document evidence.\n"
+        "• **Restriction:** do not infer manager intent or strategy cause without sources."
     ),
     "result_component_type": "text",
     "table_columns": None,
@@ -79,6 +81,26 @@ CHAT_NO_DOCUMENT_EVIDENCE_V1: dict = {
         "Show this fund's quantitative metrics",
         "Show top-ranked funds with available factsheets",
     ],
+}
+
+CHAT_FOLLOWUP_FROM_INSIGHT_V1: dict = {
+    # Fires when the user clicks a follow-up action on an insight card —
+    # confirms the deterministic context was loaded, in compact-card format.
+    "answer": (
+        "**Context loaded:** answering from the selected insight and source metrics.\n\n"
+        "• **Insight code:** {insight_code}\n"
+        "• **Entity:** {entity_name}\n"
+        "• **Evaluation date:** {evaluation_date}\n"
+        "• **Allowed conclusion:** {allowed_conclusion}"
+    ),
+    "result_component_type": "text",
+    "table_columns": None,
+    "table_rows": None,
+    "chart_type": None,
+    "chart_data": None,
+    "source_tables": [],
+    "data_confidence": {"level": "high", "coverage": 1.0, "recency": "N/A"},
+    "suggested_next_actions": [],
 }
 
 CHAT_DIRECT_ANSWER_WITH_TABLE_V1: dict = {

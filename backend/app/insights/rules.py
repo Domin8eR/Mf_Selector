@@ -72,11 +72,13 @@ class InsightRuleEngine:
             # No previous snapshot — emit SNAPSHOT_MISSING templates
             results.append({
                 "template_id": "AIW_RANK_IMPROVERS_COUNT_SNAPSHOT_MISSING_V1",
-                "variables": {"category": category_name},
+                "variables": {"category": category_name, "entity_id": category_name,
+                              "evaluation_date": str(evaluation_date)},
             })
             results.append({
                 "template_id": "AIW_BIGGEST_RANK_IMPROVER_SNAPSHOT_MISSING_V1",
-                "variables": {"category": category_name},
+                "variables": {"category": category_name, "entity_id": category_name,
+                              "evaluation_date": str(evaluation_date)},
             })
             return results
 
@@ -129,37 +131,35 @@ class InsightRuleEngine:
         improvers.sort(key=lambda x: x["rank_delta"])
 
         # ── Emit count template ───────────────────────────────────────────────
+        eval_date_str = str(evaluation_date)
         if improvers:
             best = improvers[0]
             results.append({
-                "template_id": "AIW_RANK_IMPROVERS_COUNT_POSITIVE_V1",
+                "template_id": "AIW_RANK_IMPROVERS_COUNT_V1",
                 "variables": {
                     "count": len(improvers),
                     "category": category_name,
-                    "top_improver_name": best["fund_name"],
-                    "prev_rank": best["prev_rank"],
-                    "current_rank": best["current_rank"],
+                    "entity_id": category_name,
+                    "evaluation_date": eval_date_str,
                 },
             })
             results.append({
-                "template_id": "AIW_BIGGEST_RANK_IMPROVER_POSITIVE_V1",
+                "template_id": "AIW_BIGGEST_RANK_IMPROVER_V1",
                 "variables": {
                     "fund_name": best["fund_name"],
                     "category": category_name,
-                    "prev_rank": best["prev_rank"],
+                    "entity_id": best["schemecode"],
+                    "evaluation_date": eval_date_str,
+                    "previous_rank": best["prev_rank"],
                     "current_rank": best["current_rank"],
-                    "delta": abs(best["rank_delta"]),
-                    "sharpe": best["sharpe"],
+                    "rank_improvement_abs": abs(best["rank_delta"]),
                 },
             })
         else:
             results.append({
-                "template_id": "AIW_RANK_IMPROVERS_COUNT_ZERO_V1",
-                "variables": {"category": category_name},
-            })
-            results.append({
-                "template_id": "AIW_BIGGEST_RANK_IMPROVER_NONE_V1",
-                "variables": {"category": category_name},
+                "template_id": "AIW_NO_MEANINGFUL_IMPROVERS_V1",
+                "variables": {"category": category_name, "entity_id": category_name,
+                              "evaluation_date": eval_date_str},
             })
 
         return results
@@ -194,10 +194,13 @@ class InsightRuleEngine:
         """), {"cat": category_name}).fetchall()
 
         if len(dates) < 2:
-            # Partial data guard
+            # Partial data guard — CAT_TOP_STRUCTURAL_IMPROVER_PARTIAL_V1 is not
+            # in the new template set; fall back to the "no clear improver" card
+            # rather than showing nothing.
             results.append({
-                "template_id": "CAT_TOP_STRUCTURAL_IMPROVER_PARTIAL_V1",
-                "variables": {"category": category_name},
+                "template_id": "CAT_NO_CLEAR_IMPROVER_V1",
+                "variables": {"category": category_name, "entity_id": category_name,
+                              "evaluation_date": str(evaluation_date)},
             })
             return results
 
@@ -232,8 +235,11 @@ class InsightRuleEngine:
             return results
 
         total = len(cur_rows)
+        eval_date_str = str(evaluation_date)
 
-        # ── 1. Structural improvers ───────────────────────────────────────────
+        # ── 1. Top structural improver ─────────────────────────────────────────
+        # New trigger (spec Section 2): rank_delta_6m <= -5 (not -3) AND
+        # current_rank <= 30 AND ir_slope_3y > 0. Best rank_delta_6m wins.
         improvers = []
         for r in cur_rows:
             sc, name, curr_rank, score, ir3, ir_slope = r
@@ -241,75 +247,73 @@ class InsightRuleEngine:
             if prev is None:
                 continue
             delta = curr_rank - prev  # negative = improved
-            if delta <= -3 and curr_rank <= 30:
+            slope = float(ir_slope) if ir_slope is not None else None
+            if delta <= -5 and curr_rank <= 30 and slope is not None and slope > 0:
                 improvers.append({
-                    "schemecode": sc,
-                    "fund_name": name,
-                    "current_rank": curr_rank,
-                    "prev_rank": prev,
-                    "delta": delta,
-                    "score": float(score or 0),
-                    "ir_slope": float(ir_slope or 0),
+                    "schemecode": sc, "fund_name": name, "current_rank": curr_rank,
+                    "prev_rank": prev, "delta": delta, "score": float(score or 0),
+                    "ir_slope": slope,
                 })
-
         improvers.sort(key=lambda x: x["delta"])
 
         if improvers:
             best = improvers[0]
+            outperf_rows = self.db.execute(text("""
+                SELECT informationratio FROM ratio_3year_monthlyret
+                WHERE schemecode = :sc AND informationratio IS NOT NULL
+                ORDER BY ratiodate DESC LIMIT 12
+            """), {"sc": best["schemecode"]}).fetchall()
+            outperf_vals = [float(r[0]) for r in outperf_rows]
+            outperf_pct = (
+                round(sum(1 for v in outperf_vals if v > 0) / len(outperf_vals) * 100, 1)
+                if outperf_vals else 50.0
+            )
             results.append({
-                "template_id": "CAT_TOP_STRUCTURAL_IMPROVER_FOUND_V1",
+                "template_id": "CAT_TOP_STRUCTURAL_IMPROVER_V1",
                 "variables": {
-                    "fund_name": best["fund_name"],
-                    "category": category_name,
-                    "abs_delta": abs(best["delta"]),
-                    "prev_rank": best["prev_rank"],
+                    "fund_name": best["fund_name"], "category": category_name,
+                    "entity_id": best["schemecode"], "evaluation_date": eval_date_str,
+                    "rank_improvement_abs": abs(best["delta"]),
                     "current_rank": best["current_rank"],
-                    "composite_score": best["score"],
-                    "ir_slope": best["ir_slope"],
+                    "ir_slope_3y": round(best["ir_slope"], 4),
+                    "outperformance_ratio_3y_pct": outperf_pct,
                 },
             })
         else:
             results.append({
-                "template_id": "CAT_TOP_STRUCTURAL_IMPROVER_NONE_V1",
-                "variables": {"category": category_name},
+                "template_id": "CAT_NO_CLEAR_IMPROVER_V1",
+                "variables": {"category": category_name, "entity_id": category_name,
+                              "evaluation_date": eval_date_str},
             })
 
-        # ── 2. Deteriorating top-ranked funds ─────────────────────────────────
-        deteriorating = []
+        # ── 2. Top-ranked weakening ─────────────────────────────────────────────
+        # New trigger: current_rank <= 10 AND rank_delta_6m >= +3 AND ir_slope_3y < 0.
+        weakening = []
         for r in cur_rows:
             sc, name, curr_rank, score, ir3, ir_slope = r
             prev = prev_rank_map.get(sc)
             if prev is None:
                 continue
             delta = curr_rank - prev
-            if delta >= 3 and prev <= 20:
-                deteriorating.append({
-                    "fund_name": name,
-                    "current_rank": curr_rank,
-                    "prev_rank": prev,
-                    "delta": delta,
-                    "score": float(score or 0),
+            slope = float(ir_slope) if ir_slope is not None else None
+            if curr_rank <= 10 and delta >= 3 and slope is not None and slope < 0:
+                weakening.append({
+                    "fund_name": name, "current_rank": curr_rank, "prev_rank": prev,
+                    "delta": delta, "ir_slope": slope,
                 })
+        weakening.sort(key=lambda x: x["delta"], reverse=True)
 
-        deteriorating.sort(key=lambda x: x["delta"], reverse=True)
-
-        if deteriorating:
-            worst = deteriorating[0]
+        if weakening:
+            worst = weakening[0]
             results.append({
-                "template_id": "CAT_TOP_RANKED_DETERIORATING_FOUND_V1",
+                "template_id": "CAT_TOP_RANKED_WEAKENING_V1",
                 "variables": {
-                    "fund_name": worst["fund_name"],
-                    "category": category_name,
-                    "abs_delta": worst["delta"],
-                    "prev_rank": worst["prev_rank"],
+                    "fund_name": worst["fund_name"], "category": category_name,
+                    "entity_id": worst["fund_name"], "evaluation_date": eval_date_str,
                     "current_rank": worst["current_rank"],
-                    "composite_score": worst["score"],
+                    "rank_decline_abs": worst["delta"],
+                    "ir_slope_3y": round(worst["ir_slope"], 4),
                 },
-            })
-        else:
-            results.append({
-                "template_id": "CAT_TOP_RANKED_DETERIORATING_NONE_V1",
-                "variables": {"category": category_name},
             })
 
         # ── 3. New top-30 entrants ────────────────────────────────────────────
@@ -322,88 +326,25 @@ class InsightRuleEngine:
 
         if entrants:
             results.append({
-                "template_id": "CAT_NEW_TOP_30_ENTRANTS_POSITIVE_V1",
+                "template_id": "CAT_NEW_TOP_30_ENTRANTS_V1",
                 "variables": {
-                    "entrant_count": len(entrants),
-                    "category": category_name,
-                    "entrant_names": ", ".join(e["fund_name"] for e in entrants[:3]),
-                    "prev_ranks": ", ".join(str(e["prev_rank"]) for e in entrants[:3]),
+                    "count": len(entrants), "category": category_name,
+                    "entity_id": category_name, "evaluation_date": eval_date_str,
                 },
-            })
-        else:
-            results.append({
-                "template_id": "CAT_NEW_TOP_30_ENTRANTS_ZERO_V1",
-                "variables": {"category": category_name},
             })
 
         # ── 4. Tight score cluster ────────────────────────────────────────────
         if len(cur_rows) >= 10:
-            r1 = cur_rows[0]
-            r10 = cur_rows[9]
-            score1 = float(r1[3] or 0)
-            score10 = float(r10[3] or 0)
-            gap = score1 - score10
-            shared = {
-                "category": category_name,
-                "rank1_name": r1[1],
-                "rank1_score": score1,
-                "rank10_name": r10[1],
-                "rank10_score": score10,
-                "score_gap": round(gap, 2),
-            }
-            results.append({
-                "template_id": (
-                    "CAT_TIGHT_SCORE_CLUSTER_TRUE_V1"
-                    if gap < SCORE_TIGHT_CLUSTER_THRESHOLD
-                    else "CAT_TIGHT_SCORE_CLUSTER_FALSE_V1"
-                ),
-                "variables": shared,
-            })
-
-        # ── 5. Improvement breadth ────────────────────────────────────────────
-        n_improving = sum(
-            1 for r in cur_rows
-            if prev_rank_map.get(r[0]) is not None
-            and r[2] < prev_rank_map[r[0]]
-        )
-        n_deteriorating = sum(
-            1 for r in cur_rows
-            if prev_rank_map.get(r[0]) is not None
-            and r[2] > prev_rank_map[r[0]]
-        )
-        n_with_prev = sum(1 for r in cur_rows if prev_rank_map.get(r[0]) is not None)
-
-        if n_with_prev > 0:
-            imp_pct = n_improving / n_with_prev * 100
-            det_pct = n_deteriorating / n_with_prev * 100
-            if imp_pct >= 55:
+            score1 = float(cur_rows[0][3] or 0)
+            score10 = float(cur_rows[9][3] or 0)
+            gap = round(score1 - score10, 2)
+            if gap < SCORE_TIGHT_CLUSTER_THRESHOLD:
                 results.append({
-                    "template_id": "CAT_IMPROVEMENT_BREADTH_POSITIVE_V1",
+                    "template_id": "CAT_TIGHT_SCORE_CLUSTER_V1",
                     "variables": {
-                        "category": category_name,
-                        "improving_count": n_improving,
-                        "total_count": n_with_prev,
-                        "improving_pct": round(imp_pct, 1),
-                    },
-                })
-            elif det_pct >= 55:
-                results.append({
-                    "template_id": "CAT_IMPROVEMENT_BREADTH_NEGATIVE_V1",
-                    "variables": {
-                        "category": category_name,
-                        "deteriorating_count": n_deteriorating,
-                        "total_count": n_with_prev,
-                        "deteriorating_pct": round(det_pct, 1),
-                    },
-                })
-            else:
-                results.append({
-                    "template_id": "CAT_IMPROVEMENT_BREADTH_BALANCED_V1",
-                    "variables": {
-                        "category": category_name,
-                        "improving_count": n_improving,
-                        "deteriorating_count": n_deteriorating,
-                        "total_count": n_with_prev,
+                        "category": category_name, "entity_id": category_name,
+                        "evaluation_date": eval_date_str,
+                        "score_gap_rank_1_to_10": gap,
                     },
                 })
 
@@ -418,336 +359,216 @@ class InsightRuleEngine:
     def generate_fund_detail_insights(
         self, schemecode: int, evaluation_date: date,
     ) -> list[dict]:
-        """Fund detail page — 21 FUND_*_V1 templates across 5 groups."""
+        """Fund detail page — 12 FUND_*_V1 templates + 4 preserved fallbacks."""
         results: list[dict] = []
+        eval_date_str = str(evaluation_date)
 
-        # ── Group 1: Holdings availability ────────────────────────────────────
+        def _base(fund_name: str = "") -> dict:
+            return {
+                "entity_id": schemecode,
+                "entity_name": fund_name,
+                "evaluation_date": eval_date_str,
+            }
+
+        name_row = self.db.execute(text("""
+            SELECT fund_name FROM selfmade_ranking_snapshot
+            WHERE schemecode = :sc ORDER BY snapshot_date DESC LIMIT 1
+        """), {"sc": schemecode}).fetchone()
+        fund_name = name_row[0] if name_row else str(schemecode)
+
+        # ── Group 1: Holdings ──────────────────────────────────────────────────
         holding_row = self.db.execute(text("""
-            SELECT COUNT(*) AS cnt,
-                   SUM(holding_weight_pct) AS total_wt,
-                   MAX(as_of_date) AS latest_date
-            FROM selfmade_portfolio_holding
+            SELECT COUNT(*), MAX(as_of_date) FROM selfmade_portfolio_holding
             WHERE scheme_id = :sc
         """), {"sc": schemecode}).fetchone()
-
         holding_count = int(holding_row[0]) if holding_row else 0
-        weight_coverage = float(holding_row[1] or 0) if holding_row else 0.0
-        holdings_date = holding_row[2] if holding_row else None
+        holdings_date = holding_row[1] if holding_row else None
 
         if holding_count == 0:
-            results.append({
-                "template_id": "FUND_HOLDINGS_AVAIL_NONE_V1",
-                "variables": {},
-            })
+            results.append({"template_id": "FUND_HOLDINGS_AVAIL_NONE_V1", "variables": _base(fund_name)})
         else:
-            from datetime import timedelta
-            days_stale = (evaluation_date - holdings_date).days if holdings_date else 999
-            if days_stale <= 30:
-                results.append({
-                    "template_id": "FUND_HOLDINGS_DATA_FRESH_V1",
-                    "variables": {"as_of_date": str(holdings_date)},
-                })
-            elif days_stale > 60:
-                results.append({
-                    "template_id": "FUND_HOLDINGS_AVAIL_STALE_V1",
-                    "variables": {"as_of_date": str(holdings_date)},
-                })
-            else:
-                results.append({
-                    "template_id": "FUND_HOLDINGS_AVAIL_FULL_V1",
-                    "variables": {
-                        "holding_count": holding_count,
-                        "as_of_date": str(holdings_date),
-                        "weight_coverage": weight_coverage,
-                    },
-                })
-
-        # ── Group 2: Concentration ─────────────────────────────────────────────
-        if holding_count > 0:
             top_holdings = self.db.execute(text("""
                 SELECT sm.company_name, ph.holding_weight_pct
                 FROM selfmade_portfolio_holding ph
                 JOIN selfmade_security_master sm ON sm.id = ph.security_id
-                WHERE ph.scheme_id = :sc
-                  AND ph.as_of_date = :dt
-                ORDER BY ph.holding_weight_pct DESC
-                LIMIT 5
+                WHERE ph.scheme_id = :sc AND ph.as_of_date = :dt
+                ORDER BY ph.holding_weight_pct DESC LIMIT 5
             """), {"sc": schemecode, "dt": holdings_date}).fetchall()
 
-            if top_holdings:
-                top5_pct = sum(float(r[1] or 0) for r in top_holdings)
-                top3_names = ", ".join(r[0] for r in top_holdings[:3])
-                top1_name = top_holdings[0][0]
-                top1_pct = float(top_holdings[0][1] or 0)
-                top3_pct = sum(float(r[1] or 0) for r in top_holdings[:3])
-
-                if top5_pct >= TOP_5_CONCENTRATION_HIGH:
-                    results.append({
-                        "template_id": "FUND_CONC_HIGH_V1",
-                        "variables": {
-                            "top5_pct": top5_pct,
-                            "threshold": TOP_5_CONCENTRATION_HIGH,
-                            "top3_names": top3_names,
-                        },
-                    })
-                elif top5_pct >= TOP_5_CONCENTRATION_MODERATE:
-                    results.append({
-                        "template_id": "FUND_CONC_MODERATE_V1",
-                        "variables": {
-                            "top5_pct": top5_pct,
-                            "lower": TOP_5_CONCENTRATION_MODERATE,
-                            "upper": TOP_5_CONCENTRATION_HIGH,
-                            "top3_names": top3_names,
-                        },
-                    })
-                else:
-                    results.append({
-                        "template_id": "FUND_CONC_LOW_V1",
-                        "variables": {
-                            "top5_pct": top5_pct,
-                            "top3_names": top3_names,
-                        },
-                    })
-
+            if holding_count < 5:
                 results.append({
-                    "template_id": "FUND_CONC_TOP_NAMES_V1",
-                    "variables": {
-                        "top1_name": top1_name,
-                        "top1_pct": top1_pct,
-                        "top3_names": top3_names,
-                        "top3_pct": top3_pct,
-                    },
+                    "template_id": "FUND_TOP_HOLDINGS_LESS_THAN_5_V1",
+                    "variables": {**_base(fund_name), "holding_count": holding_count,
+                                  "as_of_date": str(holdings_date)},
                 })
+            else:
+                top5_pct = round(sum(float(r[1] or 0) for r in top_holdings), 2)
+                hv = {**_base(fund_name), "top_5_weight_pct": top5_pct,
+                      "holding_count": holding_count, "as_of_date": str(holdings_date)}
+                for i, r in enumerate(top_holdings, start=1):
+                    hv[f"holding_{i}_name"] = r[0]
+                    hv[f"holding_{i}_weight_pct"] = round(float(r[1] or 0), 2)
+                results.append({"template_id": "FUND_TOP_HOLDINGS_V1", "variables": hv})
 
-        # ── Group 3: Sectors ───────────────────────────────────────────────────
+        # ── Group 2: Sectors ───────────────────────────────────────────────────
         if holding_count > 0:
             sector_rows = self.db.execute(text("""
                 SELECT sm.sector, SUM(ph.holding_weight_pct) AS sector_wt
                 FROM selfmade_portfolio_holding ph
                 JOIN selfmade_security_master sm ON sm.id = ph.security_id
-                WHERE ph.scheme_id = :sc AND ph.as_of_date = :dt
-                  AND sm.sector IS NOT NULL
-                GROUP BY sm.sector
-                ORDER BY sector_wt DESC
+                WHERE ph.scheme_id = :sc AND ph.as_of_date = :dt AND sm.sector IS NOT NULL
+                GROUP BY sm.sector ORDER BY sector_wt DESC
             """), {"sc": schemecode, "dt": holdings_date}).fetchall()
 
-            if sector_rows:
+            if len(sector_rows) < 3:
+                results.append({
+                    "template_id": "FUND_SECTORS_UNAVAILABLE_V1",
+                    "variables": {**_base(fund_name), "sector_count": len(sector_rows)},
+                })
+            else:
                 total_sector_wt = sum(float(r[1] or 0) for r in sector_rows)
-                sectors_to_80: int = 0
-                cumulative = 0.0
+                sectors_to_80, cumulative = 0, 0.0
                 for r in sector_rows:
                     cumulative += float(r[1] or 0)
                     sectors_to_80 += 1
                     if total_sector_wt > 0 and cumulative / total_sector_wt >= 0.80:
                         break
-
-                top_sector_name = sector_rows[0][0]
-                max_sector_pct = float(sector_rows[0][1] or 0)
-                top3_sectors = ", ".join(r[0] for r in sector_rows[:3])
-
-                if sectors_to_80 <= SECTORS_TO_80_CONCENTRATED:
-                    results.append({
-                        "template_id": "FUND_SECTOR_CONCENTRATED_V1",
-                        "variables": {
-                            "sectors_to_80": sectors_to_80,
-                            "top_sectors": top3_sectors,
-                        },
-                    })
-                elif sectors_to_80 >= SECTORS_TO_80_MODERATE:
-                    results.append({
-                        "template_id": "FUND_SECTOR_DIVERSIFIED_V1",
-                        "variables": {
-                            "sectors_to_80": sectors_to_80,
-                            "top_sectors": top3_sectors,
-                        },
-                    })
-
-                fin_wt = sum(
-                    float(r[1] or 0) for r in sector_rows
-                    if (r[0] or "").lower() in {"financials", "financial services"}
+                profile = (
+                    "concentrated" if sectors_to_80 <= SECTORS_TO_80_CONCENTRATED
+                    else "diversified" if sectors_to_80 >= SECTORS_TO_80_MODERATE
+                    else "moderate"
                 )
-                if fin_wt > 35.0:
-                    results.append({
-                        "template_id": "FUND_SECTOR_FIN_HEAVY_V1",
-                        "variables": {
-                            "fin_pct": fin_wt,
-                            "threshold": 35,
-                        },
-                    })
-                elif max_sector_pct <= 25.0:
-                    results.append({
-                        "template_id": "FUND_SECTOR_BALANCED_V1",
-                        "variables": {
-                            "max_sector_pct": max_sector_pct,
-                            "top_sector_name": top_sector_name,
-                        },
-                    })
+                top3 = sector_rows[:3]
+                sector_v = {
+                    **_base(fund_name),
+                    "sector_1": top3[0][0], "sector_1_weight_pct": round(float(top3[0][1] or 0), 2),
+                    "sector_2": top3[1][0], "sector_2_weight_pct": round(float(top3[1][1] or 0), 2),
+                    "sector_3": top3[2][0], "sector_3_weight_pct": round(float(top3[2][1] or 0), 2),
+                    "top_3_sector_weight_pct": round(sum(float(r[1] or 0) for r in top3), 2),
+                }
+                results.append({"template_id": "FUND_TOP_SECTORS_V1", "variables": sector_v})
+                results.append({
+                    "template_id": "FUND_SECTORS_TO_80_V1",
+                    "variables": {
+                        **sector_v, "sectors_to_80": sectors_to_80,
+                        "cumulative_sector_weight_pct": round(cumulative, 2),
+                        "sector_profile_label": profile,
+                    },
+                })
 
-        # ── Group 4: 3Y Performance ────────────────────────────────────────────
+        # ── Group 3: 3Y information ratio (percentile-based 3-way split) ───────
         metrics_row = self.db.execute(text("""
-            SELECT information_ratio_3yr, sharpe_ratio_3yr
-            FROM selfmade_scheme_metrics
-            WHERE schemecode = :sc
-        """), {"sc": schemecode}).fetchone()
-
-        returns_row = self.db.execute(text("""
-            SELECT fund_3yr_ret, active_3yr_ret, benchmark_index
-            FROM selfmade_scheme_returns
-            WHERE schemecode = :sc
+            SELECT information_ratio_3yr, sharpe_ratio_3yr, sortino_ratio_3yr
+            FROM selfmade_scheme_metrics WHERE schemecode = :sc
         """), {"sc": schemecode}).fetchone()
 
         snap_row = self.db.execute(text("""
             SELECT s.rank_in_category, sr.total_in_category, s.category,
-                   s.composite_score_v2, sr.pct_ir_3yr, sr.pct_sharpe_3yr,
-                   s.rank_delta_6m
+                   s.composite_score_v2, sr.pct_ir_3yr, s.rank_delta_6m
             FROM selfmade_ranking_snapshot s
             LEFT JOIN selfmade_scheme_ranking sr ON sr.schemecode = s.schemecode
-            WHERE s.schemecode = :sc
-            ORDER BY s.snapshot_date DESC LIMIT 1
+            WHERE s.schemecode = :sc ORDER BY s.snapshot_date DESC LIMIT 1
         """), {"sc": schemecode}).fetchone()
 
-        snap_prev = self.db.execute(text("""
-            SELECT rank_in_category FROM selfmade_ranking_snapshot
-            WHERE schemecode = :sc
-            ORDER BY snapshot_date DESC
-            LIMIT 1 OFFSET 1
-        """), {"sc": schemecode}).fetchone()
+        ir3 = float(metrics_row[0]) if metrics_row and metrics_row[0] is not None else None
+        sortino3 = float(metrics_row[2]) if metrics_row and metrics_row[2] is not None else None
+        pct_ir = float(snap_row[4]) if snap_row and snap_row[4] is not None else None
+        rank_ic = int(snap_row[0]) if snap_row else None
+        total_ic = int(snap_row[1]) if snap_row else None
 
-        if metrics_row:
-            ir3 = float(metrics_row[0]) if metrics_row[0] is not None else None
-
-            if ir3 is not None:
-                if ir3 > 0.5:
-                    rank_ic = int(snap_row[0]) if snap_row else 0
-                    total_ic = int(snap_row[1]) if snap_row else 0
-                    results.append({
-                        "template_id": "FUND_PERF_IR_STRONG_V1",
-                        "variables": {
-                            "ir_3yr": ir3,
-                            "threshold": 0.5,
-                            "rank_in_category": rank_ic,
-                            "total_in_category": total_ic,
-                        },
-                    })
-                elif ir3 < 0.1:
-                    rank_ic = int(snap_row[0]) if snap_row else 0
-                    total_ic = int(snap_row[1]) if snap_row else 0
-                    results.append({
-                        "template_id": "FUND_PERF_IR_WEAK_V1",
-                        "variables": {
-                            "ir_3yr": ir3,
-                            "threshold": 0.1,
-                            "rank_in_category": rank_ic,
-                            "total_in_category": total_ic,
-                        },
-                    })
-
-        if returns_row:
-            fund_3yr = float(returns_row[0]) if returns_row[0] is not None else None
-            active_3yr = float(returns_row[1]) if returns_row[1] is not None else None
-            bm_name = returns_row[2] or "benchmark"
-
-            if active_3yr is not None and fund_3yr is not None:
-                if active_3yr > 2.0:
-                    results.append({
-                        "template_id": "FUND_PERF_ALPHA_POSITIVE_V1",
-                        "variables": {
-                            "active_3yr_ret": active_3yr,
-                            "benchmark_name": bm_name,
-                            "threshold": 2.0,
-                            "fund_3yr_ret": fund_3yr,
-                        },
-                    })
-                elif active_3yr < 0.0:
-                    results.append({
-                        "template_id": "FUND_PERF_ALPHA_NEGATIVE_V1",
-                        "variables": {
-                            "active_3yr_ret": active_3yr,
-                            "benchmark_name": bm_name,
-                            "fund_3yr_ret": fund_3yr,
-                        },
-                    })
-
-        if snap_row:
-            rank = int(snap_row[0])
-            total = int(snap_row[1])
-            cat = snap_row[2]
-            score = float(snap_row[3] or 0)
-            pct_ir = float(snap_row[4] or 50)
-            pct_sharpe = float(snap_row[5] or 50)
-
-            if score >= 85:
-                tier = "Strong"
-            elif score >= 50:
-                tier = "Good"
-            elif score >= 15:
-                tier = "Neutral"
+        if ir3 is None:
+            results.append({"template_id": "FUND_3Y_IR_INSUFFICIENT_HISTORY_V1", "variables": _base(fund_name)})
+        else:
+            pct_ir_eff = pct_ir if pct_ir is not None else 50.0
+            ir_v = {**_base(fund_name), "ir_3y": round(ir3, 4),
+                    "ir_3y_percentile": round(pct_ir_eff, 0)}
+            if pct_ir_eff >= IR_PERCENTILE_STRONG:
+                results.append({"template_id": "FUND_3Y_IR_TOP_TIER_V1", "variables": ir_v})
+            elif pct_ir_eff >= IR_PERCENTILE_WEAK:
+                results.append({"template_id": "FUND_3Y_IR_ACCEPTABLE_V1", "variables": ir_v})
             else:
-                tier = "Weak"
+                results.append({"template_id": "FUND_3Y_IR_WEAK_V1", "variables": ir_v})
 
-            results.append({
-                "template_id": "FUND_PERF_RANK_TIER_V1",
-                "variables": {
-                    "rank_in_category": rank,
-                    "total_in_category": total,
-                    "category": cat,
-                    "tier": tier,
-                    "composite_score": score,
-                    "pct_ir": pct_ir,
-                    "pct_sharpe": pct_sharpe,
-                },
-            })
-
-        # ── Group 5: Trend ─────────────────────────────────────────────────────
-        if snap_row:
-            rank = int(snap_row[0])
-            total = int(snap_row[1])
-            cat = snap_row[2]
-            score = float(snap_row[3] or 0)
-            rank_delta = snap_row[6]
-
-            prev_rank = int(snap_prev[0]) if snap_prev else None
-
-            if prev_rank is None:
+            # ── Group 4: 3Y overall performance scorecard (GOOD_3Y rule) ────────
+            outperf_rows = self.db.execute(text("""
+                SELECT informationratio FROM ratio_3year_monthlyret
+                WHERE schemecode = :sc AND informationratio IS NOT NULL
+                ORDER BY ratiodate DESC LIMIT 12
+            """), {"sc": schemecode}).fetchall()
+            outperf_vals = [float(r[0]) for r in outperf_rows]
+            outperf_pct = (
+                round(sum(1 for v in outperf_vals if v > 0) / len(outperf_vals) * 100, 1)
+                if outperf_vals else None
+            )
+            good_3y = (
+                pct_ir_eff >= IR_PERCENTILE_STRONG
+                and sortino3 is not None and sortino3 > 0.5
+                and outperf_pct is not None and outperf_pct >= OUTPERFORMANCE_RATIO_STRONG
+            )
+            perf_v = {
+                **_base(fund_name), "ir_3y": round(ir3, 4),
+                "sortino_3y": round(sortino3, 4) if sortino3 is not None else "n/a",
+                "outperformance_ratio_3y_pct": outperf_pct if outperf_pct is not None else "n/a",
+                "rank_in_category": rank_ic, "total_in_category": total_ic,
+            }
+            if good_3y:
+                results.append({"template_id": "FUND_3Y_PERFORMANCE_STRONG_V1", "variables": perf_v})
+            else:
+                positive = "3Y IR is in the top tier" if pct_ir_eff >= IR_PERCENTILE_STRONG else "3Y IR is acceptable"
+                concern = (
+                    "Sortino is below 0.5" if sortino3 is None or sortino3 <= 0.5
+                    else "outperformance ratio is below the 60% threshold" if outperf_pct is None or outperf_pct < OUTPERFORMANCE_RATIO_STRONG
+                    else "not all risk-adjusted metrics agree"
+                )
                 results.append({
-                    "template_id": "FUND_TREND_NEW_V1",
-                    "variables": {
-                        "category": cat,
-                        "current_rank": rank,
-                        "total_in_category": total,
-                    },
+                    "template_id": "FUND_3Y_PERFORMANCE_MIXED_V1",
+                    "variables": {**perf_v, "positive_metric_summary": positive, "negative_metric_summary": concern},
                 })
-            elif rank_delta is not None and int(rank_delta) <= -RANK_IMPROVEMENT_THRESHOLD:
+
+        # ── Group 5: Trend (rank + IR slope + improvement metric together) ─────
+        ir_slope = compute_ir_slope_proxy(self.db, schemecode)
+        improvement_metric = compute_improvement_metric(self.db, schemecode)
+        rank_delta_6m = int(snap_row[5]) if snap_row and snap_row[5] is not None else None
+
+        if ir_slope is None or improvement_metric is None:
+            results.append({"template_id": "FUND_TREND_INSUFFICIENT_DATA_V1", "variables": _base(fund_name)})
+        elif rank_delta_6m is None:
+            results.append({"template_id": "FUND_TREND_INSUFFICIENT_DATA_V1", "variables": _base(fund_name)})
+        else:
+            monthly_rows = self.db.execute(text("""
+                SELECT informationratio FROM ratio_3year_monthlyret
+                WHERE schemecode = :sc AND informationratio IS NOT NULL
+                ORDER BY ratiodate DESC LIMIT 12
+            """), {"sc": schemecode}).fetchall()
+            vals = [float(r[0]) for r in monthly_rows]
+            latest_6m = round(sum(vals[:6]) / len(vals[:6]), 4) if len(vals) >= 6 else None
+            prior_6m = round(sum(vals[6:12]) / len(vals[6:12]), 4) if len(vals) >= 12 else None
+
+            trend_v = {
+                **_base(fund_name),
+                "ir_slope_3y": round(ir_slope, 4),
+                "improvement_metric": round(improvement_metric, 4),
+                "rank_delta_6m": rank_delta_6m,
+                "latest_6m_avg_rolling_ir": latest_6m if latest_6m is not None else "n/a",
+                "previous_6m_avg_rolling_ir": prior_6m if prior_6m is not None else "n/a",
+            }
+            if ir_slope > IR_SLOPE_IMPROVING and improvement_metric > 0 and rank_delta_6m <= -RANK_IMPROVEMENT_THRESHOLD:
                 results.append({
                     "template_id": "FUND_TREND_IMPROVING_V1",
-                    "variables": {
-                        "abs_delta": abs(int(rank_delta)),
-                        "prev_rank": prev_rank,
-                        "current_rank": rank,
-                        "category": cat,
-                        "composite_score": score,
-                    },
+                    "variables": {**trend_v, "rank_improvement_abs": abs(rank_delta_6m)},
                 })
-            elif rank_delta is not None and int(rank_delta) >= RANK_IMPROVEMENT_THRESHOLD:
+            elif ir_slope < IR_SLOPE_WEAKENING and improvement_metric < 0 and rank_delta_6m >= RANK_IMPROVEMENT_THRESHOLD:
                 results.append({
-                    "template_id": "FUND_TREND_DECLINING_V1",
-                    "variables": {
-                        "abs_delta": int(rank_delta),
-                        "prev_rank": prev_rank,
-                        "current_rank": rank,
-                        "category": cat,
-                        "composite_score": score,
-                    },
+                    "template_id": "FUND_TREND_WEAKENING_V1",
+                    "variables": {**trend_v, "rank_decline_abs": rank_delta_6m},
                 })
             else:
+                positive_ind = "3Y IR slope is positive" if ir_slope > 0 else "rank improved recently" if rank_delta_6m < 0 else "improvement metric is positive" if improvement_metric > 0 else "no strong positive indicator"
+                negative_ind = "rank has not improved" if rank_delta_6m >= 0 else "3Y IR slope is not positive" if ir_slope <= 0 else "improvement metric has not confirmed it"
                 results.append({
-                    "template_id": "FUND_TREND_STABLE_V1",
-                    "variables": {
-                        "current_rank": rank,
-                        "category": cat,
-                        "rank_delta": int(rank_delta) if rank_delta is not None else 0,
-                        "composite_score": score,
-                    },
+                    "template_id": "FUND_TREND_MIXED_V1",
+                    "variables": {**trend_v, "positive_trend_indicator": positive_ind,
+                                  "negative_trend_indicator": negative_ind},
                 })
 
         return results
@@ -762,19 +583,22 @@ class InsightRuleEngine:
         self, schemecodes: list[int], evaluation_date: date,
     ) -> list[dict]:
         """
-        Fund comparison page — 28 CMP_*_V1 templates.
+        Fund comparison page — 8 CMP_*_V1 templates + 1 preserved fallback.
 
-        Fires exactly one template per slot:
-          holdings_overlap | sector_overlap | category | ir | improvement | laggard | best_overall
-        Each template fires AT MOST ONCE (deduplicated by template_id).
+        Sector overlap and a separate "overall best" slot are dropped (not in
+        the new template set — category leader below already covers "who's
+        ahead"). Each template fires at most once.
         """
         results: list[dict] = []
         fired: set[str] = set()
+        eval_date_str = str(evaluation_date)
 
         def _add(template_id: str, variables: dict) -> None:
             if template_id not in fired:
                 fired.add(template_id)
-                results.append({"template_id": template_id, "variables": variables})
+                results.append({"template_id": template_id, "variables": {
+                    **variables, "evaluation_date": eval_date_str,
+                }})
 
         # ── Load per-fund ranking + metrics data ──────────────────────────────
         fund_data: list[dict] = []
@@ -789,9 +613,7 @@ class InsightRuleEngine:
             """), {"sc": sc}).fetchone()
             if row:
                 fund_data.append({
-                    "sc": row[0],
-                    "name": row[1],
-                    "category": row[2],
+                    "sc": row[0], "name": row[1], "category": row[2],
                     "rank": int(row[3]) if row[3] is not None else None,
                     "rank_delta": int(row[4]) if row[4] is not None else None,
                     "score": float(row[5]) if row[5] is not None else 0.0,
@@ -803,232 +625,158 @@ class InsightRuleEngine:
             return results
 
         is_two_fund = len(schemecodes) == 2
-        fund_names_str = ", ".join(f["name"] for f in fund_data)
+        entity_id = "_".join(str(s) for s in sorted(schemecodes))
 
         # ── 1. Holdings overlap ───────────────────────────────────────────────
         overlap = get_overlap_metrics(self.db, schemecodes)
         wo = overlap["weighted_overlap"]
         has_overlap_data = wo > 0 or overlap["common_count"] > 0
+        overlap_band = (
+            "very high" if wo >= HOLDINGS_OVERLAP_VERY_HIGH
+            else "high" if wo >= HOLDINGS_OVERLAP_HIGH
+            else "moderate" if wo >= HOLDINGS_OVERLAP_MODERATE
+            else "low"
+        )
 
-        if is_two_fund:
-            fa_name = fund_data[0]["name"] if len(fund_data) > 0 else "Fund A"
-            fb_name = fund_data[1]["name"] if len(fund_data) > 1 else "Fund B"
-            common_count = overlap["common_count"]
-            jaccard = overlap["jaccard"]
-
-            if not has_overlap_data:
-                _add("CMP_HOLDINGS_OVERLAP_UNAVAILABLE_2F_V1", {})
-            elif wo >= HOLDINGS_OVERLAP_VERY_HIGH:
-                _add("CMP_HOLDINGS_OVERLAP_VERY_HIGH_2F_V1", {
-                    "fund_a_name": fa_name, "fund_b_name": fb_name,
-                    "weighted_overlap": wo, "common_count": common_count, "jaccard": jaccard,
-                })
-            elif wo >= HOLDINGS_OVERLAP_HIGH:
-                _add("CMP_HOLDINGS_OVERLAP_HIGH_2F_V1", {
-                    "fund_a_name": fa_name, "fund_b_name": fb_name,
-                    "weighted_overlap": wo, "common_count": common_count, "jaccard": jaccard,
-                })
-            elif wo >= HOLDINGS_OVERLAP_MODERATE:
-                _add("CMP_HOLDINGS_OVERLAP_MODERATE_2F_V1", {
-                    "fund_a_name": fa_name, "fund_b_name": fb_name,
-                    "weighted_overlap": wo, "common_count": common_count, "jaccard": jaccard,
-                })
-            else:
-                _add("CMP_HOLDINGS_OVERLAP_LOW_2F_V1", {
-                    "fund_a_name": fa_name, "fund_b_name": fb_name,
-                    "weighted_overlap": wo, "common_count": common_count, "jaccard": jaccard,
-                })
+        if not has_overlap_data:
+            _add("CMP_HOLDINGS_OVERLAP_UNAVAILABLE_V1", {"entity_id": entity_id})
+        elif is_two_fund:
+            _add("CMP_HOLDINGS_OVERLAP_TWO_FUNDS_V1", {
+                "entity_id": entity_id,
+                "fund_a": fund_data[0]["name"], "fund_b": fund_data[1]["name"],
+                "weighted_overlap_pct": round(wo, 2),
+                "common_holdings_count": overlap["common_count"],
+                "jaccard_overlap_pct": round(overlap["jaccard"], 2),
+                "overlap_band": overlap_band,
+            })
         else:
-            num_funds = len(fund_data)
-            if not has_overlap_data:
-                _add("CMP_HOLDINGS_OVERLAP_MULTI_UNAVAILABLE_V1", {
-                    "num_funds": num_funds, "fund_names": fund_names_str,
-                })
-            elif wo >= HOLDINGS_OVERLAP_HIGH:
-                _add("CMP_HOLDINGS_OVERLAP_MULTI_HIGH_V1", {
-                    "num_funds": num_funds, "fund_names": fund_names_str,
-                    "avg_pairwise_overlap": wo,
-                })
-            elif wo >= HOLDINGS_OVERLAP_MODERATE:
-                _add("CMP_HOLDINGS_OVERLAP_MULTI_MODERATE_V1", {
-                    "num_funds": num_funds, "fund_names": fund_names_str,
-                    "avg_pairwise_overlap": wo,
-                })
-            else:
-                _add("CMP_HOLDINGS_OVERLAP_MULTI_LOW_V1", {
-                    "num_funds": num_funds, "fund_names": fund_names_str,
-                    "avg_pairwise_overlap": wo,
-                })
+            sc_to_name = {f["sc"]: f["name"] for f in fund_data}
+            pairs = overlap.get("pairs") or []
+            max_pair = max(pairs, key=lambda p: p["weighted_overlap"]) if pairs else None
+            min_pair = min(pairs, key=lambda p: p["weighted_overlap"]) if pairs else None
 
-        # ── 2. Sector overlap ─────────────────────────────────────────────────
-        so = overlap["sector_overlap"]
-        has_sector_data = overlap["common_sectors"] > 0 or so > 0
+            def _pair_name(p: dict | None) -> str:
+                if not p:
+                    return "—"
+                a = sc_to_name.get(p["fund_a"], str(p["fund_a"]))
+                b = sc_to_name.get(p["fund_b"], str(p["fund_b"]))
+                return f"{a} / {b}"
 
-        if not has_sector_data:
-            _add("CMP_SECTOR_OVERLAP_UNAVAILABLE_V1", {"fund_names": fund_names_str})
-        elif so >= 70:
-            _add("CMP_SECTOR_OVERLAP_HIGH_V1", {"fund_names": fund_names_str, "sector_overlap": so})
-        elif so >= 40:
-            _add("CMP_SECTOR_OVERLAP_MODERATE_V1", {"fund_names": fund_names_str, "sector_overlap": so})
-        else:
-            _add("CMP_SECTOR_OVERLAP_LOW_V1", {"fund_names": fund_names_str, "sector_overlap": so})
+            _add("CMP_HOLDINGS_OVERLAP_MULTI_FUND_V1", {
+                "entity_id": entity_id,
+                "avg_pairwise_overlap_pct": round(wo, 2),
+                "max_pair_name": _pair_name(max_pair),
+                "max_pair_overlap_pct": round(max_pair["weighted_overlap"], 2) if max_pair else 0.0,
+                "min_pair_name": _pair_name(min_pair),
+                "min_pair_overlap_pct": round(min_pair["weighted_overlap"], 2) if min_pair else 0.0,
+                "common_to_all_count": overlap.get("common_to_all_count", 0),
+            })
 
-        # ── 3. Category ───────────────────────────────────────────────────────
+        # ── 2. Category / clear leader (merges old category + best-overall) ────
         categories = {f["category"] for f in fund_data if f["category"]}
         scores = [f["score"] for f in fund_data]
         score_gap = round(max(scores) - min(scores), 2) if scores else 0.0
+        leader = max(fund_data, key=lambda f: f["score"])
+        others = [f for f in fund_data if f["sc"] != leader["sc"]]
+        metrics_won = 0
+        metric_wins: list[str] = []
+        for other in others:
+            if leader["ir"] is not None and other["ir"] is not None and leader["ir"] > other["ir"]:
+                metrics_won += 1
+                metric_wins.append("3Y IR")
+            if leader["rank"] is not None and other["rank"] is not None and leader["rank"] < other["rank"]:
+                metrics_won += 1
+                metric_wins.append("rank")
+        cat = leader["category"] or (next(iter(categories)) if categories else "")
 
-        if len(categories) == 1:
-            cat = next(iter(categories))
-            leader = max(fund_data, key=lambda f: f["score"])
-            # Count how many metrics the leader wins vs the second-best
-            others = [f for f in fund_data if f["sc"] != leader["sc"]]
-            metrics_won = 0
-            for other in others:
-                if leader["ir"] is not None and other["ir"] is not None and leader["ir"] > other["ir"]:
-                    metrics_won += 1
-                if leader["rank"] is not None and other["rank"] is not None and leader["rank"] < other["rank"]:
-                    metrics_won += 1
-            if score_gap >= 5 and metrics_won >= 2:
-                _add("CMP_SAME_CATEGORY_CLEAR_LEADER_V1", {
-                    "leader_name": leader["name"], "category": cat,
-                    "score_gap": score_gap, "metrics_won": metrics_won,
-                })
-            else:
-                _add("CMP_SAME_CATEGORY_NO_CLEAR_LEADER_V1", {
-                    "category": cat, "score_gap": score_gap,
-                })
+        if len(categories) == 1 and score_gap >= SCORE_LEADER_GAP_THRESHOLD and metrics_won >= 2:
+            _add("CMP_CLEAR_LEADER_V1", {
+                "entity_id": entity_id, "leader_fund": leader["name"], "category": cat,
+                "score_gap": score_gap, "metric_win_summary": ", ".join(metric_wins) or "composite score",
+                "leader_current_rank": leader["rank"],
+            })
         else:
-            cats_str = ", ".join(sorted(categories))
-            _add("CMP_DIFFERENT_CATEGORY_NO_LEADER_V1", {
-                "categories_str": cats_str, "num_categories": len(categories),
+            ir_leader_name = max(
+                (f for f in fund_data if f["ir"] is not None), key=lambda f: f["ir"], default=None,
+            )
+            slope_leader_name = max(
+                (f for f in fund_data if f["ir_slope"] is not None), key=lambda f: f["ir_slope"], default=None,
+            )
+            _add("CMP_NO_CLEAR_LEADER_V1", {
+                "entity_id": entity_id, "score_gap": score_gap,
+                "ir_leader": ir_leader_name["name"] if ir_leader_name else "—",
+                "trend_leader": slope_leader_name["name"] if slope_leader_name else "—",
+                "differentiated_fund": leader["name"],
             })
 
-        # ── 4. IR leadership ──────────────────────────────────────────────────
+        # ── 3. 3Y IR leadership ────────────────────────────────────────────────
         funds_with_ir = [f for f in fund_data if f["ir"] is not None]
-        if not funds_with_ir:
-            _add("CMP_IR_UNAVAILABLE_V1", {"fund_names": fund_names_str})
-        else:
+        if funds_with_ir:
             funds_sorted_ir = sorted(funds_with_ir, key=lambda f: f["ir"], reverse=True)
             ir_leader = funds_sorted_ir[0]
-            gap = (ir_leader["ir"] - funds_sorted_ir[1]["ir"]) if len(funds_sorted_ir) >= 2 else 0.0
+            second = funds_sorted_ir[1] if len(funds_sorted_ir) >= 2 else None
+            gap = (ir_leader["ir"] - second["ir"]) if second else 0.0
 
-            # Check for IR conflict: leader on IR != leader on slope
             funds_with_slope = [f for f in fund_data if f["ir_slope"] is not None]
-            ir_conflict = False
-            slope_leader = None
-            if funds_with_slope and len(funds_with_ir) >= 2:
-                slope_leader_f = max(funds_with_slope, key=lambda f: f["ir_slope"])
-                if slope_leader_f["sc"] != ir_leader["sc"] and slope_leader_f["ir_slope"] > IR_SLOPE_IMPROVING:
-                    ir_conflict = True
-                    slope_leader = slope_leader_f
+            slope_leader = max(funds_with_slope, key=lambda f: f["ir_slope"], default=None)
+            ir_conflict = (
+                slope_leader is not None and slope_leader["sc"] != ir_leader["sc"]
+                and slope_leader["ir_slope"] > IR_SLOPE_IMPROVING
+            )
 
-            if ir_conflict and slope_leader is not None:
-                _add("CMP_IR_CONFLICT_RECENT_IMPROVER_V1", {
-                    "ir_leader_name": ir_leader["name"],
-                    "slope_leader_name": slope_leader["name"],
-                    "ir_leader_val": ir_leader["ir"],
-                    "slope_leader_val": slope_leader["ir_slope"],
-                })
-            elif gap > IR_GAP_CLEAR_THRESHOLD:
-                _add("CMP_IR_LEADER_CLEAR_V1", {
-                    "leader_name": ir_leader["name"], "leader_ir": ir_leader["ir"], "gap": gap,
+            if ir_conflict:
+                _add("CMP_3Y_IR_CONFLICT_V1", {
+                    "entity_id": entity_id,
+                    "ir_leader": ir_leader["name"], "leader_ir_3y": round(ir_leader["ir"], 4),
+                    "trend_leader": slope_leader["name"],
+                    "trend_reason": f"IR slope {slope_leader['ir_slope']:+.4f}/month",
                 })
             else:
-                _add("CMP_IR_LEADER_CLOSE_V1", {
-                    "leader_name": ir_leader["name"], "leader_ir": ir_leader["ir"], "gap": gap,
+                _add("CMP_BETTER_3Y_IR_V1", {
+                    "entity_id": entity_id,
+                    "ir_leader": ir_leader["name"], "leader_ir_3y": round(ir_leader["ir"], 4),
+                    "second_fund": second["name"] if second else "—",
+                    "second_ir_3y": round(second["ir"], 4) if second and second["ir"] is not None else "n/a",
+                    "ir_gap": round(gap, 4),
                 })
 
-        # ── 5. Recent improvement ─────────────────────────────────────────────
-        # Use ir_slope as improvement signal
+        # ── 4. Recent improvement leader ────────────────────────────────────────
         funds_with_slope = [f for f in fund_data if f["ir_slope"] is not None]
-        if not funds_with_slope:
-            _add("CMP_RECENT_IMPROVEMENT_NONE_V1", {"fund_names": fund_names_str})
-        else:
-            slopes_sorted = sorted(funds_with_slope, key=lambda f: f["ir_slope"], reverse=True)
-            top = slopes_sorted[0]
-            gap_imp = (top["ir_slope"] - slopes_sorted[1]["ir_slope"]) if len(slopes_sorted) >= 2 else 0.0
-
-            if top["ir_slope"] <= 0:
-                _add("CMP_RECENT_IMPROVEMENT_NONE_V1", {"fund_names": fund_names_str})
-            elif gap_imp >= 0.01:
-                _add("CMP_RECENT_IMPROVEMENT_LEADER_CLEAR_V1", {
-                    "leader_name": top["name"],
-                    "improvement_score": top["ir_slope"],
-                    "gap": gap_imp,
-                })
-            else:
-                _add("CMP_RECENT_IMPROVEMENT_CLOSE_V1", {
-                    "leader_name": top["name"],
-                    "improvement_score": top["ir_slope"],
-                    "gap": gap_imp,
+        if funds_with_slope:
+            top = max(funds_with_slope, key=lambda f: f["ir_slope"])
+            if top["ir_slope"] > 0:
+                _add("CMP_RECENT_IMPROVEMENT_LEADER_V1", {
+                    "entity_id": entity_id, "trend_leader": top["name"],
+                    "rank_improvement_abs": abs(top["rank_delta"]) if top["rank_delta"] and top["rank_delta"] < 0 else 0,
+                    "ir_slope_3y": round(top["ir_slope"], 4),
+                    "improvement_metric": round(top["ir_slope"], 4),
+                    "recent_ir_change": round(top["ir_slope"], 4),
                 })
 
-        # ── 6. Laggard ────────────────────────────────────────────────────────
+        # ── 5. Laggard ────────────────────────────────────────────────────────
         if len(fund_data) >= 2:
             laggard = min(fund_data, key=lambda f: f["score"])
-            weak_conditions: list[str] = []
-            clear_laggard = False
-
-            # Clear laggard: IR < 0, slope < IR_SLOPE_WEAKENING, rank worsened
+            weak_conditions = 0
             if laggard["ir"] is not None and laggard["ir"] < 0:
-                weak_conditions.append(f"IR {laggard['ir']:.2f}")
+                weak_conditions += 1
             if laggard["ir_slope"] is not None and laggard["ir_slope"] < IR_SLOPE_WEAKENING:
-                weak_conditions.append(f"IR slope {laggard['ir_slope']:+.4f}/month")
+                weak_conditions += 1
             if laggard["rank_delta"] is not None and laggard["rank_delta"] >= RANK_IMPROVEMENT_THRESHOLD:
-                weak_conditions.append(f"rank dropped {laggard['rank_delta']} places")
+                weak_conditions += 1
 
-            if len(weak_conditions) >= 2:
-                clear_laggard = True
-
-            if clear_laggard:
-                _add("CMP_LAGGARD_CLEAR_V1", {
-                    "laggard_name": laggard["name"],
-                    "laggard_ir_pct": laggard["ir"] if laggard["ir"] is not None else 0.0,
-                    "laggard_ir_slope": laggard["ir_slope"] if laggard["ir_slope"] is not None else 0.0,
-                    "laggard_downside_capture": "N/A",
-                    "rank_delta": laggard["rank_delta"] if laggard["rank_delta"] is not None else 0,
+            if weak_conditions >= 2:
+                ir_vals = [f["ir"] for f in fund_data if f["ir"] is not None]
+                percentile = (
+                    round(sum(1 for v in ir_vals if v <= laggard["ir"]) / len(ir_vals) * 100, 0)
+                    if laggard["ir"] is not None and ir_vals else 50
+                )
+                _add("CMP_LAGGARD_V1", {
+                    "entity_id": entity_id, "laggard_fund": laggard["name"],
+                    "laggard_ir_3y": round(laggard["ir"], 4) if laggard["ir"] is not None else "n/a",
+                    "laggard_ir_percentile": percentile,
+                    "laggard_ir_slope_3y": round(laggard["ir_slope"], 4) if laggard["ir_slope"] is not None else "n/a",
+                    "laggard_rank_delta": laggard["rank_delta"] if laggard["rank_delta"] is not None else "n/a",
                 })
-            elif weak_conditions:
-                _add("CMP_LAGGARD_SOFT_V1", {
-                    "laggard_name": laggard["name"],
-                    "weak_conditions": ", ".join(weak_conditions),
-                })
-            else:
-                _add("CMP_LAGGARD_NONE_V1", {"fund_names": fund_names_str})
-
-        # ── 7. Best overall ───────────────────────────────────────────────────
-        winner = max(fund_data, key=lambda f: f["score"])
-        others = [f for f in fund_data if f["sc"] != winner["sc"]]
-        score_gap_best = round(winner["score"] - min(f["score"] for f in fund_data), 2) if others else 0.0
-
-        metrics_won_count = 0
-        for other in others:
-            if winner["ir"] is not None and other["ir"] is not None and winner["ir"] > other["ir"]:
-                metrics_won_count += 1
-            if winner["rank"] is not None and other["rank"] is not None and winner["rank"] < other["rank"]:
-                metrics_won_count += 1
-            if winner["ir_slope"] is not None and other["ir_slope"] is not None and winner["ir_slope"] > other["ir_slope"]:
-                metrics_won_count += 1
-
-        winner_cat = winner["category"] or (next(iter(categories)) if categories else "")
-
-        if score_gap_best >= 5 and metrics_won_count >= 2:
-            _add("CMP_BEST_CLEAR_V1", {
-                "winner_name": winner["name"],
-                "category": winner_cat,
-                "score_gap": score_gap_best,
-                "metrics_won_count": metrics_won_count,
-            })
-        else:
-            reason = (
-                "score gap is narrow" if score_gap_best < 5
-                else "no single fund dominates across IR, rank, and improvement"
-            )
-            _add("CMP_BEST_NO_CLEAR_WINNER_V1", {
-                "fund_names": fund_names_str,
-                "reason": reason,
-            })
 
         return results
 

@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.db import get_db
+from app.insights.calculator import get_aum_for_fund
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 
@@ -415,10 +416,11 @@ def fund_summary_v2(scheme_id: str, db: Session = Depends(get_db)) -> dict:
     """
     # Selfmade ranking snapshot (latest)
     snap = db.execute(text("""
-        SELECT s.rank_in_category, sr.total_in_category, s.category,
-               s.composite_score_v2, s.information_ratio_3yr, s.snapshot_date
+        SELECT s.rank_in_category,
+               (SELECT COUNT(*) FROM selfmade_ranking_snapshot s2
+                WHERE s2.category = s.category AND s2.snapshot_date = s.snapshot_date) AS total_in_category,
+               s.category, s.composite_score_v2, s.information_ratio_3yr, s.snapshot_date
         FROM selfmade_ranking_snapshot s
-        LEFT JOIN selfmade_scheme_ranking sr ON sr.schemecode = s.schemecode
         WHERE s.schemecode = :sc
         ORDER BY s.snapshot_date DESC LIMIT 1
     """), {"sc": int(scheme_id)}).fetchone()
@@ -452,10 +454,9 @@ def fund_summary_v2(scheme_id: str, db: Session = Depends(get_db)) -> dict:
         LIMIT 1
     """), {"id": scheme_id}).fetchone()
 
-    # AUM + expense ratio
-    aum_row = db.execute(text(
-        "SELECT total FROM scheme_aum WHERE schemecode = :sc ORDER BY date DESC LIMIT 1"
-    ), {"sc": int(scheme_id)}).fetchone()
+    # AUM (accord_fintech_mf_portfolio — see get_aum_for_fund docstring for why
+    # not scheme_aum, a 47-row vendor snapshot frozen at 2022-08-31) + expense ratio
+    aum_result = get_aum_for_fund(db, int(scheme_id))
     er_row = db.execute(text(
         "SELECT expratio FROM expenceratio WHERE schemecode = :sc AND flag='A' ORDER BY date DESC LIMIT 1"
     ), {"sc": int(scheme_id)}).fetchone()
@@ -482,7 +483,8 @@ def fund_summary_v2(scheme_id: str, db: Session = Depends(get_db)) -> dict:
         "category": category,
         "benchmark": benchmark,
         "launch_date": str(master[1].date()) if master and master[1] else None,
-        "aum_cr": round(float(aum_row[0]) / 100, 2) if aum_row and aum_row[0] else None,
+        "aum_cr": aum_result["value"],
+        "aum_as_of_date": aum_result["as_of_date"],
         "expense_ratio_pct": float(er_row[0]) if er_row else None,
         "rank_in_category": int(snap[0]) if snap else None,
         "total_in_category": int(snap[1]) if snap else None,

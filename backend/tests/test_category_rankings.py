@@ -8,10 +8,23 @@ Integration tests — Category Rankings.
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from app.main import app
+from app.core.config import settings
+from app.routers.rankings import CATEGORY_TAXONOMY
 
 CAT = "Equity — Large Cap"
+# /rankings/category reads selfmade_ranking_snapshot (bucket_36-keyed),
+# populated by app.rankings.recompute.recompute_all_rankings() — the one
+# governed formula, requiring ALL of the active rule version's components
+# to be real (no fabricated neutral-percentile fallback for missing data).
+# RANKING_CAT below uses the real bucket_36 taxonomy value. /explain,
+# /what-changed, /history, and /insights/category-rankings still key off
+# CAT (the legacy "Equity — X" string) for their trend history — real
+# trend only exists for categories that have been recomputed more than once.
+RANKING_CAT = "Large Cap"
 EPSILON = 0.02  # floating-point tolerance for contribution sum
 
 
@@ -21,16 +34,25 @@ def client():
         yield c
 
 
+@pytest.fixture(scope="module")
+def db():
+    engine = create_engine(settings.database_url)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    yield session
+    session.close()
+
+
 # ── 1. /rankings/category ────────────────────────────────────────────────────
 
 def test_category_rankings_returns_200(client):
-    r = client.get(f"/rankings/category?category={CAT}")
+    r = client.get(f"/rankings/category?category={RANKING_CAT}")
     assert r.status_code == 200, r.text
 
 
 def test_category_rankings_sorted_by_rank(client):
     """Ranks must be monotonically increasing."""
-    r = client.get(f"/rankings/category?category={CAT}&page_size=50")
+    r = client.get(f"/rankings/category?category={RANKING_CAT}&page_size=50")
     data = r.json()
     ranks = [f["rank"] for f in data["results"]]
     assert ranks == sorted(ranks), f"Ranks are not sorted: {ranks[:10]}"
@@ -38,7 +60,7 @@ def test_category_rankings_sorted_by_rank(client):
 
 def test_category_rankings_scores_descending(client):
     """Composite scores must be non-increasing (higher rank = higher score)."""
-    r = client.get(f"/rankings/category?category={CAT}&page_size=50")
+    r = client.get(f"/rankings/category?category={RANKING_CAT}&page_size=50")
     data = r.json()
     scores = [f["composite_score"] for f in data["results"]]
     # Allow small floating-point ties
@@ -50,15 +72,15 @@ def test_category_rankings_scores_descending(client):
 
 def test_category_rankings_pagination(client):
     """page=1 and page=2 must return non-overlapping results."""
-    r1 = client.get(f"/rankings/category?category={CAT}&page=1&page_size=10")
-    r2 = client.get(f"/rankings/category?category={CAT}&page=2&page_size=10")
+    r1 = client.get(f"/rankings/category?category={RANKING_CAT}&page=1&page_size=10")
+    r2 = client.get(f"/rankings/category?category={RANKING_CAT}&page=2&page_size=10")
     ids1 = {f["schemecode"] for f in r1.json()["results"]}
     ids2 = {f["schemecode"] for f in r2.json()["results"]}
     assert not ids1.intersection(ids2), "Pages overlap in schemecodes"
 
 
 def test_category_rankings_status_labels_present(client):
-    r = client.get(f"/rankings/category?category={CAT}&page_size=20")
+    r = client.get(f"/rankings/category?category={RANKING_CAT}&page_size=20")
     data = r.json()
     valid = {"Strong", "Good", "Neutral", "Weak"}
     for fund in data["results"]:
@@ -68,7 +90,7 @@ def test_category_rankings_status_labels_present(client):
 
 
 def test_category_rankings_versioned_response(client):
-    r = client.get(f"/rankings/category?category={CAT}")
+    r = client.get(f"/rankings/category?category={RANKING_CAT}")
     data = r.json()
     for field in ("data_version", "rule_version", "calculation_version",
                   "as_of_date", "evaluation_date"):
@@ -76,10 +98,14 @@ def test_category_rankings_versioned_response(client):
 
 
 # ── 2. /rankings/explain ─────────────────────────────────────────────────────
+# explain/what-changed/history read the legacy snapshot subset, keyed off CAT
+# (the old "Equity — X" string) — Large Cap's schemecodes are an exact subset
+# there, so a schemecode found via the new /rankings/category (RANKING_CAT)
+# always has a matching legacy snapshot row for CAT.
 
 def test_explain_rank_returns_200(client):
     # Get top-ranked fund from seeded data
-    r = client.get(f"/rankings/category?category={CAT}&page_size=1")
+    r = client.get(f"/rankings/category?category={RANKING_CAT}&page_size=1")
     sc = r.json()["results"][0]["schemecode"]
     r2 = client.get(f"/rankings/explain/{sc}?category={CAT}")
     assert r2.status_code == 200, r2.text
@@ -90,7 +116,7 @@ def test_explain_contribution_sum_equals_composite_score(client):
     Sum of component contributions must equal composite_score
     within floating-point epsilon.
     """
-    r = client.get(f"/rankings/category?category={CAT}&page_size=5")
+    r = client.get(f"/rankings/category?category={RANKING_CAT}&page_size=5")
     for fund in r.json()["results"]:
         sc = fund["schemecode"]
         r2 = client.get(f"/rankings/explain/{sc}?category={CAT}")
@@ -104,14 +130,14 @@ def test_explain_contribution_sum_equals_composite_score(client):
 
 
 def test_explain_has_four_components(client):
-    r = client.get(f"/rankings/category?category={CAT}&page_size=1")
+    r = client.get(f"/rankings/category?category={RANKING_CAT}&page_size=1")
     sc = r.json()["results"][0]["schemecode"]
     r2 = client.get(f"/rankings/explain/{sc}?category={CAT}")
     assert len(r2.json()["components"]) == 4
 
 
 def test_explain_weights_sum_to_one(client):
-    r = client.get(f"/rankings/category?category={CAT}&page_size=1")
+    r = client.get(f"/rankings/category?category={RANKING_CAT}&page_size=1")
     sc = r.json()["results"][0]["schemecode"]
     r2 = client.get(f"/rankings/explain/{sc}?category={CAT}")
     weights = [c["weight"] for c in r2.json()["components"]]
@@ -165,3 +191,116 @@ def test_ranking_history_has_six_dates(client):
     data = r.json()
     assert len(data["dates"]) == 6, f"Expected 6 dates, got: {data['dates']}"
     assert len(data["series"]) == 5
+
+
+# ── 4. Full 35-value category taxonomy (category_taxonomy_current) ──────────
+
+def test_taxonomy_has_expected_35_values(client):
+    assert len(CATEGORY_TAXONOMY) == 35
+    assert CATEGORY_TAXONOMY[0] == "ALL"
+    assert set(CATEGORY_TAXONOMY[1:4]) == {"ALL Equity", "ALL Hybrid", "ALL Passive"}
+
+
+def test_all_32_categories_accepted_without_erroring(client):
+    """Every real taxonomy value must return 200 — including zero-coverage ones."""
+    for cat in CATEGORY_TAXONOMY:
+        r = client.get("/rankings/category", params={"category": cat})
+        assert r.status_code == 200, f"category={cat!r} failed: {r.status_code} {r.text}"
+        data = r.json()
+        assert data["category"] == cat
+        assert isinstance(data["results"], list)
+
+
+def test_unknown_category_returns_400_not_500(client):
+    r = client.get("/rankings/category?category=Not+A+Real+Category")
+    assert r.status_code == 400
+
+
+def test_categories_endpoint_lists_all_35_with_real_counts(client):
+    r = client.get("/rankings/categories")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["categories"]) == 35
+    keys = [c["key"] for c in data["categories"]]
+    assert keys == CATEGORY_TAXONOMY
+    for c in data["categories"]:
+        assert isinstance(c["ranked_count"], int)
+        assert c["ranked_count"] >= 0
+
+
+def test_zero_coverage_category_returns_honest_empty_state(client):
+    """
+    Gold ETFs / Gold FoFs has real taxonomy schemes but none are in the
+    rule-engine's scored universe (an equity/benchmark-relative model) —
+    must be an honest empty list, not an error or fabricated rows.
+    """
+    r = client.get("/rankings/category", params={"category": "Gold ETFs / Gold FoFs"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 0
+    assert data["results"] == []
+
+
+def test_zero_coverage_category_with_aum_filter_still_honest_empty(client):
+    """Step 3: AUM filter must compose cleanly with a zero-coverage category."""
+    r = client.get("/rankings/category", params={"category": "Gold ETFs / Gold FoFs", "aum_min_cr": 1000})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 0
+    assert data["results"] == []
+
+
+def test_aggregate_category_returns_real_union_of_leaves(client):
+    """
+    ALL Equity's total must equal the sum of its real per-leaf ranked counts,
+    grouped by the actual bucket_group field returned by /rankings/categories
+    (category_taxonomy_current's real grouping) — not a hand-picked list of
+    "equity-sounding" category names.
+    """
+    cats = client.get("/rankings/categories").json()["categories"]
+    equity_leaf_sum = sum(
+        c["ranked_count"] for c in cats
+        if not c["is_aggregate"] and c["bucket_group"] == "ALL Equity"
+    )
+    expected_total = next(c["ranked_count"] for c in cats if c["key"] == "ALL Equity")
+    assert equity_leaf_sum == expected_total
+    assert expected_total > 0
+
+    r = client.get("/rankings/category", params={"category": "ALL Equity", "page_size": 1})
+    assert r.status_code == 200
+    assert r.json()["total"] == expected_total
+
+
+def test_all_aggregate_equals_full_ranked_universe(client, db):
+    """
+    'ALL' must equal the true governed-pipeline universe — every schemecode
+    with a real snapshot row under its current bucket_36 category — cross-
+    checked directly against the DB, not a hardcoded count. This is
+    strictly smaller than the full taxonomy (7,223 schemes) because
+    recompute_all_rankings() requires ALL of the active rule version's
+    components to be real for a fund (no fabricated neutral-percentile
+    fallback for missing IR/TE data — see recompute.py's docstring).
+    """
+    from sqlalchemy import text as sqltext
+    expected_total = db.execute(sqltext("""
+        SELECT COUNT(DISTINCT s.schemecode)
+        FROM selfmade_ranking_snapshot s
+        JOIN category_taxonomy_current t
+            ON t.schemecode = s.schemecode AND t.bucket_36 = s.category
+    """)).scalar()
+    assert expected_total > 0
+
+    r = client.get("/rankings/category", params={"category": "ALL", "page_size": 1})
+    assert r.status_code == 200
+    assert r.json()["total"] == expected_total
+
+
+def test_all_hybrid_is_genuinely_zero_today(client):
+    """
+    Step 0/2 finding: the rule engine has never scored a Hybrid fund — every
+    ALL Hybrid leaf (Arbitrage, Aggressive Hybrid, etc.) is real taxonomy
+    with zero ranked coverage. Confirms this is a real data gap, not a bug.
+    """
+    r = client.get("/rankings/category", params={"category": "ALL Hybrid"})
+    assert r.status_code == 200
+    assert r.json()["total"] == 0

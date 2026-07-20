@@ -5,6 +5,16 @@ Computes risk-adjusted metrics from selfmade_scheme_returns and
 mf_ratios_defaultbm. Information ratio uses the proxy formula since
 mf_ratios_defaultbm.informationratio is NULL for all rows.
 
+Sortino is sourced from ratio_3year_monthlyret.sortino, not
+mf_ratios_defaultbm.sortino: the latter is frozen to a single stale
+one-year window (2021-09-30 to 2022-09-30 for 213 of its 217 rows,
+~4 years old) despite feeding a column named "_3yr", and is on a
+different (daily-return) scale — median -0.05 vs +0.59 for the
+monthly table, only 4/217 funds exceed 0.5. ratio_3year_monthlyret is
+keyed by schemecode (one row per fund, most-recent 3yr monthly window)
+and matches its own stored value exactly via
+(average_nav - rfr/12) / semisd, confirmed by hand for multiple funds.
+
 Idempotent — drops and recreates the table on every run.
 """
 
@@ -67,11 +77,13 @@ def main():
                sr.active_1yr_ret, sr.active_3yr_ret, sr.active_5yr_ret,
                sr.is_fallback_benchmark,
                rat.sharpe as accord_sharpe,
-               rat.sortino as accord_sortino,
+               r3y.sortino as accord_sortino,
                rat.beta as accord_beta
         FROM selfmade_scheme_returns sr
         LEFT JOIN mf_ratios_defaultbm rat
             ON rat.schemecode = sr.schemecode AND rat.flag = 'A'
+        LEFT JOIN ratio_3year_monthlyret r3y
+            ON r3y.schemecode = sr.schemecode
         ORDER BY sr.schemecode;
     """)
     rows = cur.fetchall()
@@ -119,10 +131,10 @@ def main():
             vol_proxy = abs(f3 - f1) * math.sqrt(3) + 0.001
             sharpe = clamp((f3 - RISK_FREE_3YR) / vol_proxy, -20, 20)
 
-        # --- Sortino ratio ---
+        # --- Sortino ratio (ratio_3year_monthlyret.sortino, see module docstring) ---
         sortino = None
         if accord_sortino is not None:
-            sortino = accord_sortino
+            sortino = clamp(accord_sortino, -20, 20)
 
         # --- Outperformance flags ---
         op1 = (f1 > bm1) if (f1 is not None and bm1 is not None) else None

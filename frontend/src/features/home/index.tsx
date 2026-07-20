@@ -2,13 +2,12 @@ import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import {
-  Sparkles, ArrowRight, LayoutDashboard, Clock, ShieldCheck,
-  Database, BarChart2, AlertCircle, ChevronRight,
+  Sparkles, ArrowRight, MessageSquare, Clock,
+  BarChart2, AlertCircle, ChevronRight,
 } from "lucide-react"
 import { queryKeys } from "@/lib/query-keys"
 import {
-  healthApi, insightsApi, workspacesApi, alertsApi,
-  rankingRunsApi, dataQualityApi,
+  healthApi, insightsApi, chatApi, rankingRunsApi,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import InsightCard from "@/components/insights/InsightCard"
@@ -139,45 +138,43 @@ function DailyBriefingCard() {
   )
 }
 
-// ── Recent Workspaces Card ─────────────────────────────────────────────────────
-function RecentWorkspacesCard() {
+// ── Recent Chats Card ───────────────────────────────────────────────────────────
+function RecentChatsCard() {
   const navigate = useNavigate()
   const { data, isLoading, isError } = useQuery({
-    queryKey: queryKeys.home.recentWorkspaces,
-    queryFn: () => workspacesApi.recent(5),
+    queryKey: queryKeys.home.recentChats,
+    queryFn: () => chatApi.getRecentThreads(5),
     staleTime: 60_000,
   })
-  const workspaces = data?.workspaces ?? []
+  const threads = data?.threads ?? []
 
   return (
-    <CardShell icon={LayoutDashboard} title="Recent Workspaces">
+    <CardShell icon={MessageSquare} title="Recent Chats">
       {isLoading ? (
         <LoadingState rows={3} />
       ) : isError ? (
-        <ErrorState message="Could not load workspaces." />
-      ) : workspaces.length === 0 ? (
+        <ErrorState message="Could not load recent chats." />
+      ) : threads.length === 0 ? (
         <EmptyState
-          message="No saved workspaces yet."
+          message="No chats yet."
           cta="Open Research Chat to start one"
           ctaTo="/chat"
         />
       ) : (
         <ul className="space-y-1">
-          {workspaces.map((ws) => (
-            <li key={ws.id}>
+          {threads.map((t) => (
+            <li key={t.thread_id}>
               <button
-                onClick={() => navigate("/chat")}
+                onClick={() => navigate(`/chat?thread=${t.thread_id}`)}
                 className="w-full flex items-center gap-2 rounded-lg px-3 py-2 hover:bg-gray-50 text-xs text-left"
               >
                 <Clock className="h-3 w-3 text-blue-400 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <div className="text-gray-700 font-medium truncate">{ws.name}</div>
+                  <div className="text-gray-700 font-medium truncate">{t.title}</div>
                   <div className="text-gray-400 text-[10px]">
-                    {ws.updated_at
-                      ? new Date(ws.updated_at).toLocaleDateString("en-IN", {
-                          day: "2-digit", month: "short", year: "numeric",
-                        })
-                      : "—"}
+                    {new Date(t.updated_at).toLocaleDateString("en-IN", {
+                      day: "2-digit", month: "short", year: "numeric",
+                    })}
                   </div>
                 </div>
                 <ChevronRight className="h-3 w-3 text-gray-300 flex-shrink-0" />
@@ -185,103 +182,6 @@ function RecentWorkspacesCard() {
             </li>
           ))}
         </ul>
-      )}
-    </CardShell>
-  )
-}
-
-// ── Pending Rule Approvals Card ────────────────────────────────────────────────
-function PendingRuleApprovalsCard() {
-  const { data, isLoading } = useQuery({
-    queryKey: queryKeys.home.alerts,
-    queryFn: () => alertsApi.list(),
-    staleTime: 60_000,
-  })
-  const alerts = data?.alerts ?? []
-  const pendingApprovals = alerts.filter(
-    (a) => a.severity === "warning" || a.severity === "critical",
-  )
-
-  return (
-    <CardShell icon={ShieldCheck} title="Pending Rule Approvals" linkLabel="Rule Lab" linkTo="/rule-lab">
-      {isLoading ? (
-        <LoadingState rows={2} />
-      ) : pendingApprovals.length === 0 ? (
-        <div className="text-center py-4 space-y-1">
-          <ShieldCheck className="h-6 w-6 text-green-400 mx-auto" />
-          <p className="text-xs font-medium text-green-600">No pending approvals</p>
-          <p className="text-[11px] text-gray-400">
-            Rule changes submitted for review will appear here.
-          </p>
-        </div>
-      ) : (
-        <ul className="space-y-1.5">
-          {pendingApprovals.map((alert) => (
-            <li
-              key={alert.id}
-              className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
-            >
-              <p className="font-medium">{alert.title}</p>
-              <p className="text-[11px] opacity-80">{alert.message}</p>
-            </li>
-          ))}
-        </ul>
-      )}
-    </CardShell>
-  )
-}
-
-// ── Data Quality Status Card ───────────────────────────────────────────────────
-function DataQualityCard() {
-  const { data, isLoading, isError } = useQuery({
-    queryKey: queryKeys.home.dataQuality,
-    queryFn: () => dataQualityApi.getSummary(),
-    staleTime: 5 * 60_000,
-  })
-
-  const domains = data
-    ? Object.entries(data.domains).map(([key, d]) => ({
-        key,
-        label: d.label,
-        pct: d.pct,
-      }))
-    : []
-
-  function pctColor(pct: number) {
-    if (pct >= 80) return "text-green-600"
-    if (pct >= 50) return "text-amber-600"
-    return "text-red-500"
-  }
-
-  return (
-    <CardShell icon={Database} title="Data Quality" linkLabel="Full report" linkTo="/data-quality">
-      {isLoading ? (
-        <LoadingState rows={4} />
-      ) : isError ? (
-        <ErrorState message="Could not load data quality stats." />
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-2">
-            {domains.map((d) => (
-              <div
-                key={d.key}
-                className="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2"
-              >
-                <p className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">
-                  {d.label}
-                </p>
-                <p className={cn("text-xl font-bold mt-0.5", pctColor(d.pct))}>
-                  {d.pct}%
-                </p>
-              </div>
-            ))}
-          </div>
-          {data?.last_nav_date && (
-            <p className="text-[10px] text-gray-400">
-              Last NAV: {data.last_nav_date}
-            </p>
-          )}
-        </>
       )}
     </CardShell>
   )
@@ -297,7 +197,7 @@ function RecentRankingRunsCard() {
   const runs = data?.runs ?? []
 
   return (
-    <CardShell icon={BarChart2} title="Recent Ranking Runs" linkLabel="Rankings" linkTo="/rankings">
+    <CardShell icon={BarChart2} title="Recent Fund Rankings" linkLabel="Rankings" linkTo="/rankings">
       {isLoading ? (
         <LoadingState rows={4} />
       ) : isError ? (
@@ -470,19 +370,11 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* ── Card grid — row 1: Daily Briefing + Recent Workspaces + Pending Approvals ── */}
+      {/* ── Card grid — Daily Briefing + Recent Fund Rankings + Recent Chats ── */}
       <div className="grid grid-cols-3 gap-4">
         <DailyBriefingCard />
-        <RecentWorkspacesCard />
-        <PendingRuleApprovalsCard />
-      </div>
-
-      {/* ── Card grid — row 2: Data Quality (narrow) + Recent Ranking Runs (wide) ── */}
-      <div className="grid grid-cols-3 gap-4">
-        <DataQualityCard />
-        <div className="col-span-2">
-          <RecentRankingRunsCard />
-        </div>
+        <RecentRankingRunsCard />
+        <RecentChatsCard />
       </div>
 
       {/* ── Footer status pill ── */}

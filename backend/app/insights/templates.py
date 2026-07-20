@@ -1339,7 +1339,7 @@ FUND_3Y_IR_TOP_TIER_V1 = InsightTemplate(
         "**3Y IR:** {ir_3y}",
         "**Category percentile:** {ir_3y_percentile}th",
         "**Rule bucket:** strong",
-        "**Tooltip:** IR above 0.5 usually indicates positive active returns with controlled tracking error.",
+        "**Tooltip:** a category percentile of 70 or higher usually indicates positive active returns with controlled tracking error relative to peers.",
     ],
     chip_keys=["ir_3y", "ir_3y_percentile"],
     follow_up_label='Ask "Why is the 3Y IR strong?"',
@@ -1347,7 +1347,7 @@ FUND_3Y_IR_TOP_TIER_V1 = InsightTemplate(
         "This fund's 3Y information ratio of {ir_3y} is in the {ir_3y_percentile}th percentile "
         "of its category — a top-tier risk-adjusted consistency signal."
     ),
-    source_tables=["selfmade_scheme_metrics", "selfmade_scheme_ranking"],
+    source_tables=["selfmade_scheme_metrics", "selfmade_ranking_snapshot", "selfmade_ranking_contribution"],
     severity="positive",
     priority=8,
 )
@@ -1375,7 +1375,7 @@ FUND_3Y_IR_ACCEPTABLE_V1 = InsightTemplate(
         "This fund's 3Y information ratio of {ir_3y} is in the {ir_3y_percentile}th percentile "
         "of its category — acceptable, but not a category leader."
     ),
-    source_tables=["selfmade_scheme_metrics", "selfmade_scheme_ranking"],
+    source_tables=["selfmade_scheme_metrics", "selfmade_ranking_snapshot", "selfmade_ranking_contribution"],
     severity="neutral",
     priority=9,
 )
@@ -1403,7 +1403,7 @@ FUND_3Y_IR_WEAK_V1 = InsightTemplate(
         "This fund's 3Y information ratio of {ir_3y} is in the {ir_3y_percentile}th percentile "
         "of its category — weak versus peers."
     ),
-    source_tables=["selfmade_scheme_metrics", "selfmade_scheme_ranking"],
+    source_tables=["selfmade_scheme_metrics", "selfmade_ranking_snapshot", "selfmade_ranking_contribution"],
     severity="negative",
     priority=9,
 )

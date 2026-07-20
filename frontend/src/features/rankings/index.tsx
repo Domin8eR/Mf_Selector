@@ -18,12 +18,15 @@ import { queryKeys } from "@/lib/query-keys"
 import InsightPanel from "@/components/insights/InsightPanel"
 
 // ── Category options ──────────────────────────────────────────────────────────
-const CATEGORIES = [
-  "Equity — Large Cap",
-  "Equity — Mid Cap",
-  "Equity — Small Cap",
-] as const
-type Category = (typeof CATEGORIES)[number]
+// The full category_taxonomy_current.bucket_36 / bucket_group taxonomy is
+// fetched live from /rankings/categories (real ranked-fund counts per
+// category) — no hardcoded list here. Every endpoint (main list, explain,
+// history, what-changed, category insights) now takes the same real
+// bucket_36 value directly — no legacy-string translation. Trend panels
+// (bump chart / what-changed) only show data once a category has been
+// recomputed more than once (each rule approval or pipeline run adds one
+// real data point); they degrade to "no data yet" honestly otherwise.
+type Category = string
 
 // ── Status badge colours ──────────────────────────────────────────────────────
 const STATUS_COLOURS: Record<string, string> = {
@@ -40,7 +43,7 @@ const LINE_COLORS = [
 ]
 
 type SortKey = "rank" | "composite_score" | "ir_3yr" | "sharpe_3yr"
-               | "active_ret_3yr" | "ir_slope_6m_proxy" | "tracking_error_3yr"
+               | "active_ret_3yr" | "ir_slope_6m_proxy" | "tracking_error_3yr" | "aum_cr"
 
 type DrawerTab = "overview" | "explain-rank"
 
@@ -620,6 +623,9 @@ function FundRow({
         </span>
       </td>
       <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">{fund.amc_name}</td>
+      <td className="px-3 py-2 text-xs font-mono text-gray-700 text-right whitespace-nowrap">
+        {fund.aum_cr != null ? `₹${fund.aum_cr.toLocaleString("en-IN", { maximumFractionDigits: 0 })}` : <span className="text-gray-400">—</span>}
+      </td>
       <td className="px-3 py-2 text-xs font-mono text-gray-700 text-right">{fmtNum(fund.ir_3yr, 3)}</td>
       <td className="px-3 py-2 text-xs font-mono text-gray-700 text-right">{fmtNum(fund.sharpe_3yr, 3)}</td>
       <td className="px-3 py-2 text-xs font-mono text-right">
@@ -666,9 +672,19 @@ function FundRow({
 export default function CategoryRankingsPage() {
   const navigate = useNavigate()
 
-  const [category, setCategory] = useState<Category>("Equity — Large Cap")
+  const [category, setCategory] = useState<Category>("Large Cap")
+  const { data: categoryOptionsData } = useQuery({
+    queryKey: queryKeys.rankings.categoryOptions,
+    queryFn: () => rankingsV2Api.getCategories(),
+    staleTime: 5 * 60_000,
+  })
+  const categoryOptions = categoryOptionsData?.categories ?? []
   const [search, setSearch] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
+  const [aumMin, setAumMin] = useState("")
+  const [aumMax, setAumMax] = useState("")
+  const [appliedAumMin, setAppliedAumMin] = useState<number | null>(null)
+  const [appliedAumMax, setAppliedAumMax] = useState<number | null>(null)
   const [page, setPage] = useState(1)
   const PAGE_SIZE = 50
 
@@ -682,10 +698,12 @@ export default function CategoryRankingsPage() {
   } | null>(null)
 
   const { data: rankData, isLoading: rankLoading } = useQuery({
-    queryKey: queryKeys.rankings.v2Category(category, undefined, debouncedSearch, page),
+    queryKey: queryKeys.rankings.v2Category(category, undefined, debouncedSearch, page, appliedAumMin, appliedAumMax),
     queryFn: () => rankingsV2Api.getCategory({
       category,
       search: debouncedSearch || undefined,
+      aumMinCr: appliedAumMin,
+      aumMaxCr: appliedAumMax,
       page,
       pageSize: PAGE_SIZE,
     }),
@@ -721,6 +739,16 @@ export default function CategoryRankingsPage() {
       setDebouncedSearch(search)
       setPage(1)
     }
+  }
+
+  function applyAumFilter() {
+    setAppliedAumMin(aumMin.trim() ? Number(aumMin) : null)
+    setAppliedAumMax(aumMax.trim() ? Number(aumMax) : null)
+    setPage(1)
+  }
+
+  function handleAumKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") applyAumFilter()
   }
 
   function toggleSelect(sc: number) {
@@ -760,9 +788,29 @@ export default function CategoryRankingsPage() {
             }}
             className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
           >
-            {CATEGORIES.map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
+            {categoryOptions.length === 0 ? (
+              <option value={category}>{category}</option>
+            ) : (
+              (["Overview", "ALL Equity", "ALL Hybrid", "ALL Passive"] as const).map((group) => {
+                const opts = group === "Overview"
+                  ? categoryOptions.filter((c) => c.is_aggregate)
+                  : categoryOptions.filter((c) => c.bucket_group === group)
+                if (opts.length === 0) return null
+                return (
+                  <optgroup key={group} label={group === "Overview" ? "Overview" : group.replace("ALL ", "")}>
+                    {opts.map((c) => (
+                      <option
+                        key={c.key}
+                        value={c.key}
+                        style={c.ranked_count === 0 ? { color: "#9ca3af" } : undefined}
+                      >
+                        {c.key} ({c.ranked_count})
+                      </option>
+                    ))}
+                  </optgroup>
+                )
+              })
+            )}
           </select>
         </div>
 
@@ -771,6 +819,29 @@ export default function CategoryRankingsPage() {
           <span className="text-sm text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50">
             Client Default v1.0
           </span>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs text-gray-500 font-medium">AUM (Cr)</label>
+          <input
+            type="number"
+            placeholder="Min"
+            value={aumMin}
+            onChange={(e) => setAumMin(e.target.value)}
+            onKeyDown={handleAumKeyDown}
+            onBlur={applyAumFilter}
+            className="w-20 px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300"
+          />
+          <span className="text-gray-300">–</span>
+          <input
+            type="number"
+            placeholder="Max"
+            value={aumMax}
+            onChange={(e) => setAumMax(e.target.value)}
+            onKeyDown={handleAumKeyDown}
+            onBlur={applyAumFilter}
+            className="w-20 px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300"
+          />
         </div>
 
         <div className="relative ml-auto">
@@ -847,6 +918,9 @@ export default function CategoryRankingsPage() {
                   </th>
                   <th className="text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide py-2 px-3">Scheme</th>
                   <th className="text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide py-2 px-3">AMC</th>
+                  <th className={thClass} onClick={() => toggleSort("aum_cr")}>
+                    <span className="flex items-center gap-1">AUM (Cr) <SortIcon col="aum_cr" active={sortKey} dir={sortDir} /></span>
+                  </th>
                   <th className={thClass} onClick={() => toggleSort("ir_3yr")}>
                     <span className="flex items-center gap-1">IR₃ <SortIcon col="ir_3yr" active={sortKey} dir={sortDir} /></span>
                   </th>
@@ -873,14 +947,16 @@ export default function CategoryRankingsPage() {
               <tbody>
                 {rankLoading ? (
                   <tr>
-                    <td colSpan={13} className="text-center py-12 text-gray-400 text-sm">
+                    <td colSpan={14} className="text-center py-12 text-gray-400 text-sm">
                       Loading ranked funds…
                     </td>
                   </tr>
                 ) : sortedFunds.length === 0 ? (
                   <tr>
-                    <td colSpan={13} className="text-center py-12 text-gray-400 text-sm">
-                      No ranked funds found.
+                    <td colSpan={14} className="text-center py-12 text-gray-400 text-sm">
+                      {debouncedSearch || appliedAumMin != null || appliedAumMax != null
+                        ? "No funds match the current filters in this category."
+                        : "No ranked funds currently available in this category."}
                     </td>
                   </tr>
                 ) : (

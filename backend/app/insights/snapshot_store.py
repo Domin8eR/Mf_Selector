@@ -116,7 +116,7 @@ def store_insights(
             "expanded_bullets": json.dumps(card.expanded_bullets, default=str),
             "chips": json.dumps(card.chips, default=str),
             "facts_json": json.dumps(card.facts_json, default=str),
-            "source_tables": ["selfmade_scheme_ranking", "selfmade_scheme_metrics"],
+            "source_tables": ["selfmade_ranking_snapshot", "selfmade_ranking_contribution", "selfmade_scheme_metrics"],
             "assumptions": [
                 "Static benchmark mapping used",
                 "Static scheme name used",

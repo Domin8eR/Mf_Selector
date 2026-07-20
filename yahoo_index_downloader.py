@@ -192,6 +192,7 @@ def fetch_index_history(db_name, tickers, max_retries=3):
                     auto_adjust=False,
                 )
                 if hist is None or hist.empty:
+                
                     if attempt < max_retries:
                         wait = 2 ** attempt
                         log.debug("  %s empty on attempt %d, retrying in %ds", ticker, attempt, wait)

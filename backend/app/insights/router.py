@@ -73,7 +73,12 @@ def workspace_daily_briefing(
     eval_date = evaluation_date or date.today()
     ensure_table(db)
 
-    categories = ["Equity — Large Cap", "Equity — Mid Cap", "Equity — Small Cap"]
+    # Real bucket_36 category names (see app/routers/rankings.py's module
+    # docstring) — recompute_all_rankings() writes new snapshot rows under
+    # these, not the legacy "Equity — X" strings. Using the old strings
+    # here would keep reading frozen historical rows forever and never see
+    # a fresh recompute.
+    categories = ["Large Cap", "Mid Cap", "Small Cap"]
     all_cards: list[InsightCard] = []
 
     for cat in categories:
@@ -247,7 +252,7 @@ def precompute_daily(
 
     # Fund detail
     schemes = db.execute(text(
-        "SELECT schemecode FROM selfmade_scheme_ranking ORDER BY schemecode"
+        "SELECT DISTINCT schemecode FROM selfmade_ranking_snapshot ORDER BY schemecode"
     )).fetchall()
 
     fund_count = 0

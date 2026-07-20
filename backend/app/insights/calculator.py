@@ -527,6 +527,28 @@ def get_expense_ratio_for_fund(db: Session, schemecode: int) -> dict:
     return {"value": None, "status": "insufficient_data"}
 
 
+def get_aum_for_fund(db: Session, schemecode: int) -> dict:
+    """
+    Get latest AUM (Rs crores) from accord_fintech_mf_portfolio — the most
+    complete internal source (8,278 schemes, current to the latest monthly
+    portfolio disclosure), not the near-empty, frozen-at-2022 scheme_aum/
+    avg_scheme_aum vendor snapshots (47/185 schemes, single date each).
+    """
+    row = db.execute(text("""
+        SELECT aum, invdate FROM accord_fintech_mf_portfolio
+        WHERE schemecode = :sc AND aum IS NOT NULL AND aum > 0
+        ORDER BY invdate DESC LIMIT 1
+    """), {"sc": schemecode}).fetchone()
+
+    if row and row[0] is not None:
+        return {
+            "value": round(float(row[0]) / 100.0, 2),
+            "as_of_date": str(row[1].date()) if row[1] else None,
+            "status": "ok",
+        }
+    return {"value": None, "as_of_date": None, "status": "insufficient_data"}
+
+
 def get_sector_overlap_table(db: Session, schemecodes: list[int]) -> list[dict]:
     """
     Per-sector weight for each fund + min(weights) = overlap for each sector.

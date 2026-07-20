@@ -49,6 +49,10 @@ function shortName(fund_name: string): string {
   return fund_name.replace(/\s+(Fund|Direct|Growth|Plan|Regular)\b/gi, "").trim().slice(0, 28)
 }
 
+function aumSuffix(aum_cr: number | null | undefined): string {
+  return aum_cr != null ? ` (₹${aum_cr.toLocaleString("en-IN", { maximumFractionDigits: 0 })} Cr)` : ""
+}
+
 function fmtPct(v: number | null, d = 2): string {
   return v == null ? "—" : v.toFixed(d) + "%"
 }
@@ -242,11 +246,13 @@ function FundPickerDropdown({
 function FundSelector({
   selectedCodes,
   fundNames,
+  fundAum,
   onAdd,
   onRemove,
 }: {
   selectedCodes: number[]
   fundNames: Record<number, string>
+  fundAum: Record<number, number | null>
   onAdd: (sc: number, name: string) => void
   onRemove: (sc: number) => void
 }) {
@@ -267,8 +273,11 @@ function FundSelector({
             style={{ borderColor: COLORS[i % COLORS.length] + "80" }}
           >
             <span className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
-            <span className="text-xs font-medium text-gray-700 max-w-[160px] truncate">
-              {fundNames[sc] ?? `Fund ${sc}`}
+            <span className="text-xs font-medium text-gray-700 max-w-[150px] truncate">
+              {fundNames[sc] ? shortName(fundNames[sc]) : `Fund ${sc}`}
+            </span>
+            <span className="text-xs text-gray-400 whitespace-nowrap flex-shrink-0">
+              {aumSuffix(fundAum[sc])}
             </span>
             <button
               onClick={() => onRemove(sc)}
@@ -447,10 +456,10 @@ function LayoutA({
               <tr className="border-b border-gray-100 bg-gray-50">
                 <th className="text-left py-2 px-4 font-semibold text-gray-500 w-40">Metric</th>
                 <th className="text-right py-2 px-3 font-semibold" style={{ color: COLORS[0] }}>
-                  {shortName(fa.fund_name)}
+                  {shortName(fa.fund_name)}{aumSuffix(fa.aum_cr)}
                 </th>
                 <th className="text-right py-2 px-3 font-semibold" style={{ color: COLORS[1] }}>
-                  {shortName(fb.fund_name)}
+                  {shortName(fb.fund_name)}{aumSuffix(fb.aum_cr)}
                 </th>
                 <th className="text-center py-2 px-3 font-semibold text-gray-500 w-20">Advantage</th>
               </tr>
@@ -684,7 +693,7 @@ function LayoutB({
             <div className="flex items-start justify-between gap-2 mb-2">
               <div className="flex items-center gap-1.5">
                 <span className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
-                <span className="text-xs font-semibold text-gray-800 leading-tight">{f.fund_name}</span>
+                <span className="text-xs font-semibold text-gray-800 leading-tight">{f.fund_name}{aumSuffix(f.aum_cr)}</span>
               </div>
               <span className={cn("text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0", STATUS_CLS[f.status_label])}>
                 {f.status_label}
@@ -769,7 +778,7 @@ function LayoutB({
                 <th className="text-left py-2 px-4 font-semibold text-gray-500 w-36">Metric</th>
                 {funds.map((f, i) => (
                   <th key={f.schemecode} className="text-right py-2 px-3 font-semibold" style={{ color: COLORS[i] }}>
-                    {shortName(f.fund_name)}
+                    {shortName(f.fund_name)}{aumSuffix(f.aum_cr)}
                   </th>
                 ))}
                 <th className="text-center py-2 px-3 font-semibold text-gray-500 w-20">Best</th>
@@ -995,6 +1004,7 @@ export default function ComparePage() {
       <FundSelector
         selectedCodes={selectedCodes}
         fundNames={fundNames}
+        fundAum={Object.fromEntries((cData?.funds ?? []).map(f => [f.schemecode, f.aum_cr]))}
         onAdd={add}
         onRemove={remove}
       />

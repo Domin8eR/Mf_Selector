@@ -1,8 +1,29 @@
 """
-Rankings endpoints — reads from selfmade_ranking_snapshot (rule-engine-scored).
+Rankings endpoints.
 
-Scoring: weighted percentile normalization using selfmade_rule_component weights.
-Components: 3Y IR (0.40), Sharpe 3Y proxy (0.25), Active Ret 3Y (0.20), TE 3Y lower_better (0.15).
+Every endpoint here reads exclusively from the unified, governed pipeline:
+selfmade_ranking_snapshot (schemecode, category, composite_score_v2,
+rank_in_category, rank_delta_6m) + selfmade_ranking_contribution (per-
+component breakdown), both populated by app.rankings.recompute's
+recompute_all_rankings() — the one canonical formula, reading whatever
+rule version is currently active. category values are real
+category_taxonomy_current.bucket_36 leaves (e.g. "Large Cap", "Sectoral
+funds") or one of the 3 aggregates ("ALL Equity"/"ALL Hybrid"/"ALL
+Passive") or "ALL" (no filter) — see CATEGORY_TAXONOMY below.
+
+selfmade_scheme_ranking (the old, disconnected-from-the-rule-engine table
+built by the now-retired scripts/step4_scheme_ranking.py) is no longer
+read or written anywhere in this file — left as an inert historical
+artifact, not dropped.
+
+/history, /what-changed, /explain, and /fund/{id}/rank-history compare
+across snapshot_date for the same category: they only have real trend
+once recompute_all_rankings() has run more than once for that category
+(each rule approval, or a manual pipeline run, adds one more real data
+point) — they degrade to "no data yet" honestly otherwise, not an error.
+
+Scoring: weighted percentile normalization using selfmade_rule_component weights
+of whichever selfmade_rule_version is currently active.
 All ranks, scores, and contributions come from pre-computed DB tables.
 
 Language rule: NEVER use "recommend", "buy", "sell", "best fund", "top pick".
@@ -29,6 +50,25 @@ _STATUS_CUTOFFS = [
 ]
 
 SORT_BASIS = "RULE_ENGINE_V1"
+
+# ── Category taxonomy — category_taxonomy_current.bucket_36 / bucket_group ────
+# This is the real, normalized fund taxonomy (category_taxonomy_mapping, active
+# version), not a hand-invented grouping. bucket_36 is the 31 leaf categories;
+# bucket_group is the aggregate ("ALL Equity" / "ALL Hybrid" / "ALL Passive")
+# each leaf rolls up into. "ALL" is not a taxonomy value — it means no filter.
+CATEGORY_TAXONOMY: list[str] = [
+    "ALL", "ALL Equity", "ALL Hybrid", "ALL Passive",
+    "Large Cap", "Large & Mid Cap", "Flexi Cap", "Multi Cap", "Mid Cap", "Small Cap",
+    "ELSS", "Focused Fund", "Value / Contra", "Dividend Yield",
+    "Sectoral funds", "Thematic funds", "Index Funds", "ETFs",
+    "International Equity", "International ETFs / FoFs", "Market Cap Funds",
+    "Low Duration", "Ultra Short Duration", "Overnight funds", "Liquid",
+    "Fixed Maturity Plans", "Aggressive Hybrid", "Conservative Hybrid",
+    "Balanced Advantage / Dynamic Asset Allocation", "Multi Asset Allocation",
+    "Arbitrage", "Equity Savings", "Fund of Funds",
+    "Gold ETFs / Gold FoFs", "Silver ETFs / Silver FoFs",
+]
+_AGGREGATE_CATEGORIES = {"ALL", "ALL Equity", "ALL Hybrid", "ALL Passive"}
 
 
 def _get_active_rule_version(db: "Session") -> str:
@@ -88,87 +128,155 @@ def recent_ranking_runs_v1(
     }
 
 
+# ── /rankings/categories — dropdown options with real coverage counts ────────
+
+@router.get("/categories")
+def list_ranking_categories(db: Session = Depends(get_db)) -> dict:
+    """
+    Full 35-value category taxonomy (4 aggregates + 31 real bucket_36 leaves)
+    with the real count of currently-ranked schemes in each — so the frontend
+    can show a live coverage badge instead of implying every category is
+    equally populated.
+    """
+    rows = db.execute(text("""
+        SELECT t.bucket_36, t.bucket_group, COUNT(DISTINCT s.schemecode) AS ranked_count
+        FROM category_taxonomy_current t
+        LEFT JOIN selfmade_ranking_snapshot s
+            ON s.schemecode = t.schemecode AND s.category = t.bucket_36
+        WHERE t.bucket_36 IS NOT NULL AND t.bucket_36 <> ''
+        GROUP BY t.bucket_36, t.bucket_group
+    """)).fetchall()
+
+    counts_by_leaf = {r[0]: int(r[2]) for r in rows}
+    group_by_leaf = {r[0]: r[1] for r in rows}
+    counts_by_group: dict[str, int] = {}
+    for _, group, count in rows:
+        if group:
+            counts_by_group[group] = counts_by_group.get(group, 0) + int(count)
+    total_ranked = sum(counts_by_leaf.values())
+
+    categories = []
+    for key in CATEGORY_TAXONOMY:
+        if key == "ALL":
+            count = total_ranked
+        elif key in _AGGREGATE_CATEGORIES:
+            count = counts_by_group.get(key, 0)
+        else:
+            count = counts_by_leaf.get(key, 0)
+        categories.append({
+            "key": key,
+            "is_aggregate": key in _AGGREGATE_CATEGORIES,
+            # Real bucket_group this leaf rolls up into (null for aggregates/"ALL")
+            "bucket_group": None if key in _AGGREGATE_CATEGORIES else group_by_leaf.get(key),
+            "ranked_count": count,
+        })
+
+    return {"categories": categories, "data_version": settings.data_version}
+
+
 # ── /rankings/category ────────────────────────────────────────────────────────
 
 @router.get("/category")
 def get_category_rankings(
-    category: str = Query(default="Equity — Large Cap"),
+    category: str = Query(default="Large Cap"),
     evaluation_date: str | None = Query(
         default=None,
-        description="YYYY-MM-DD. Omit for latest snapshot.",
+        description=(
+            "Accepted for backward compatibility; unused. This endpoint always "
+            "shows each fund's most recent real snapshot for the requested category."
+        ),
     ),
     rule_set_id: str | None = Query(default=None),
     search: str | None = Query(default=None, description="Filter by fund name substring"),
+    aum_min_cr: float | None = Query(default=None, description="Minimum AUM in Rs crores"),
+    aum_max_cr: float | None = Query(default=None, description="Maximum AUM in Rs crores"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> dict:
     """
-    Return ranked funds for a category from the rule-engine snapshot.
-    Scores come from selfmade_ranking_snapshot + contributions from
-    selfmade_ranking_contribution.
+    Return ranked funds for a category (or an ALL / ALL Equity / ALL Hybrid /
+    ALL Passive aggregate) from the unified, governed ranking pipeline
+    (selfmade_ranking_snapshot, written by recompute_all_rankings()),
+    filtered via category_taxonomy_current.bucket_36 / bucket_group.
+
+    For each schemecode matching the taxonomy filter, only its most recent
+    real snapshot row for its OWN current bucket_36 category is used (the
+    LATERAL join below) — this naturally excludes any stale row stored
+    under an old category naming, and naturally excludes schemecodes that
+    have never been scored (insufficient data), without needing a separate
+    "insufficient data" branch.
+
+    rank_in_category / total_in_category are computed live (RANK() OVER /
+    COUNT(*) OVER) within the taxonomy-filtered set, which reproduces the
+    stored per-category percentile rank exactly for single-category leaves
+    and gives an honest, real rank for aggregate views spanning multiple
+    underlying categories (e.g. "Sectoral funds", "ALL Equity").
     """
-    # Resolve evaluation_date to the latest available snapshot
-    if evaluation_date:
-        snap_date_row = db.execute(text("""
-            SELECT MAX(snapshot_date) FROM selfmade_ranking_snapshot
-            WHERE category = :cat AND snapshot_date <= :ed::date
-        """), {"cat": category, "ed": evaluation_date}).fetchone()
-    else:
-        snap_date_row = db.execute(text("""
-            SELECT MAX(snapshot_date) FROM selfmade_ranking_snapshot
-            WHERE category = :cat
-        """), {"cat": category}).fetchone()
+    if category not in CATEGORY_TAXONOMY:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown category '{category}'. Must be one of: {', '.join(CATEGORY_TAXONOMY)}",
+        )
 
     active_rv = _get_active_rule_version(db)
-    if not snap_date_row or not snap_date_row[0]:
-        return {
-            "data_version": settings.data_version,
-            "rule_version": active_rv,
-            "calculation_version": "2.0",
-            "as_of_date": str(date.today()),
-            "evaluation_date": evaluation_date or str(date.today()),
-            "category": category,
-            "sort_basis": SORT_BASIS,
-            "total": 0,
-            "page": page,
-            "page_size": page_size,
-            "results": [],
-        }
+    as_of_row = db.execute(text("SELECT MAX(snapshot_date) FROM selfmade_ranking_snapshot")).fetchone()
+    as_of = as_of_row[0] if as_of_row and as_of_row[0] else date.today()
 
-    snap_date = snap_date_row[0]
+    if category == "ALL":
+        taxonomy_filter = "TRUE"
+    elif category in _AGGREGATE_CATEGORIES:
+        taxonomy_filter = "t.bucket_group = :category"
+    else:
+        taxonomy_filter = "t.bucket_36 = :category"
 
-    # Fetch ranked rows with component scores
+    # aum_cr: latest positive AUM from accord_fintech_mf_portfolio (see
+    # get_aum_for_fund in app.insights.calculator for why not scheme_aum —
+    # same source, computed inline here to avoid an N+1 query per row).
     search_filter = f"%{search}%" if search else None
-    rows = db.execute(text("""
-        SELECT
-            s.schemecode,
-            s.fund_name,
-            s.rank_in_category,
-            s.composite_score_v2,
-            s.information_ratio_3yr,
-            s.rank_delta_6m,
-            sm.sharpe_ratio_3yr,
-            sm.tracking_error_3yr,
-            sm.ir_slope_6m_proxy,
-            sr.active_3yr_ret,
-            sr.fund_1yr_ret,
-            sr.fund_3yr_ret,
-            COALESCE(a.s_name, 'Unknown AMC') AS amc_name,
-            s.composite_score_v2 AS prev_score
-        FROM selfmade_ranking_snapshot s
-        JOIN selfmade_scheme_metrics sm ON sm.schemecode = s.schemecode
-        LEFT JOIN selfmade_scheme_returns sr ON sr.schemecode = s.schemecode
-        LEFT JOIN altstreet_scheme_master asm ON asm.scheme_id::integer = s.schemecode
-        LEFT JOIN amc_mst_new a ON a.amc_code = asm.amc::integer
-        WHERE s.snapshot_date = :snap_date
-          AND s.category = :cat
-          AND (:search IS NULL OR s.fund_name ILIKE :search)
-        ORDER BY s.rank_in_category
+    rows = db.execute(text(f"""
+        SELECT * FROM (
+            SELECT
+                s.schemecode,
+                s.fund_name,
+                RANK() OVER (ORDER BY s.composite_score_v2 DESC) AS rank_in_category,
+                COUNT(*) OVER () AS total_in_category,
+                s.composite_score_v2 AS composite_score,
+                s.information_ratio_3yr,
+                s.rank_delta_6m,
+                sm.sharpe_ratio_3yr,
+                sm.tracking_error_3yr,
+                sm.ir_slope_6m_proxy,
+                sr.active_3yr_ret,
+                sr.fund_1yr_ret,
+                sr.fund_3yr_ret,
+                COALESCE(a.s_name, 'Unknown AMC') AS amc_name,
+                (
+                    SELECT (p.aum / 100.0) FROM accord_fintech_mf_portfolio p
+                    WHERE p.schemecode = s.schemecode AND p.aum IS NOT NULL AND p.aum > 0
+                    ORDER BY p.invdate DESC LIMIT 1
+                ) AS aum_cr
+            FROM category_taxonomy_current t
+            JOIN LATERAL (
+                SELECT * FROM selfmade_ranking_snapshot s2
+                WHERE s2.schemecode = t.schemecode AND s2.category = t.bucket_36
+                ORDER BY s2.snapshot_date DESC LIMIT 1
+            ) s ON TRUE
+            JOIN selfmade_scheme_metrics sm ON sm.schemecode = s.schemecode
+            LEFT JOIN selfmade_scheme_returns sr ON sr.schemecode = s.schemecode
+            LEFT JOIN altstreet_scheme_master asm ON asm.scheme_id::integer = s.schemecode
+            LEFT JOIN amc_mst_new a ON a.amc_code = asm.amc::integer
+            WHERE {taxonomy_filter}
+        ) ranked
+        WHERE (:aum_min IS NULL OR aum_cr >= :aum_min)
+          AND (:aum_max IS NULL OR aum_cr <= :aum_max)
+          AND (:search IS NULL OR fund_name ILIKE :search)
+        ORDER BY rank_in_category
     """), {
-        "snap_date": snap_date,
-        "cat": category,
+        "category": category,
         "search": search_filter,
+        "aum_min": aum_min_cr,
+        "aum_max": aum_max_cr,
     }).fetchall()
 
     total = len(rows)
@@ -177,14 +285,15 @@ def get_category_rankings(
 
     results = []
     for r in paged:
-        sc, name, rank, score, ir3, delta6m, sharpe, te, slope, active_ret, ret1y, ret3y, amc, _ = r
+        (sc, name, rank, total_ic, score, ir3, delta6m, sharpe, te, slope,
+         active_ret, ret1y, ret3y, amc, aum_cr) = r
         results.append({
             "schemecode": sc,
             "fund_name": name,
             "amc_name": amc,
-            "rank": rank,
+            "rank": int(rank),
             "composite_score": round(float(score or 0), 2),
-            "status_label": _status_label(rank, total),
+            "status_label": _status_label(int(rank), total),
             "rank_delta_6m": int(delta6m) if delta6m is not None else None,
             "ir_3yr": round(float(ir3), 4) if ir3 is not None else None,
             "sharpe_3yr": round(float(sharpe), 4) if sharpe is not None else None,
@@ -193,14 +302,15 @@ def get_category_rankings(
             "active_ret_3yr": round(float(active_ret), 4) if active_ret is not None else None,
             "ret_1yr": round(float(ret1y), 4) if ret1y is not None else None,
             "ret_3yr": round(float(ret3y), 4) if ret3y is not None else None,
+            "aum_cr": round(float(aum_cr), 2) if aum_cr is not None else None,
         })
 
     return {
         "data_version": settings.data_version,
         "rule_version": active_rv,
         "calculation_version": "2.0",
-        "as_of_date": str(snap_date),
-        "evaluation_date": str(snap_date),
+        "as_of_date": str(as_of),
+        "evaluation_date": str(as_of),
         "category": category,
         "sort_basis": SORT_BASIS,
         "total": total,
@@ -214,7 +324,7 @@ def get_category_rankings(
 
 @router.get("/history")
 def get_ranking_history(
-    category: str = Query(default="Equity — Large Cap"),
+    category: str = Query(default="Large Cap"),
     top_n: int = Query(default=10, ge=3, le=30, description="Track top-N funds"),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -299,7 +409,7 @@ def get_ranking_history(
 
 @router.get("/what-changed")
 def get_what_changed(
-    category: str = Query(default="Equity — Large Cap"),
+    category: str = Query(default="Large Cap"),
     db: Session = Depends(get_db),
 ) -> dict:
     """
@@ -407,7 +517,7 @@ def get_what_changed(
 @router.get("/explain/{schemecode}")
 def explain_fund_rank(
     schemecode: int,
-    category: str = Query(default="Equity — Large Cap"),
+    category: str = Query(default="Large Cap"),
     evaluation_date: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -448,7 +558,12 @@ def explain_fund_rank(
         WHERE snapshot_date = :dt AND category = :cat
     """), {"dt": snap_date, "cat": category}).scalar() or 1
 
-    # Contributions
+    # Contributions — scoped to the CURRENTLY ACTIVE rule version's
+    # components only. Every rule version recompute_all_rankings() has ever
+    # run for produces its own component_id set (no FK collision across
+    # versions), so a snapshot row accumulates one contribution row per
+    # component PER VERSION that ever scored it — without this filter,
+    # explain would mix old and new weights for the same fund.
     contrib_rows = db.execute(text("""
         SELECT
             rc.component_id,
@@ -463,6 +578,7 @@ def explain_fund_rank(
             rc.contribution
         FROM selfmade_ranking_contribution rc
         JOIN selfmade_rule_component rcomp ON rcomp.id = rc.component_id
+        JOIN selfmade_rule_version rv ON rv.id = rcomp.rule_version_id AND rv.is_active = true
         WHERE rc.snapshot_id = :sid
         ORDER BY rcomp.sort_order
     """), {"sid": snap_id}).fetchall()
@@ -509,7 +625,7 @@ def explain_fund_rank(
 @router.get("/fund/{scheme_plan_id}/rank-history")
 def fund_rank_history(
     scheme_plan_id: str,
-    category: str = Query(default="Equity — Large Cap"),
+    category: str = Query(default="Large Cap"),
     db: Session = Depends(get_db),
 ) -> dict:
     """Rank trajectory for a single fund across all 6 evaluation dates."""

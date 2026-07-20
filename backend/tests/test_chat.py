@@ -275,3 +275,38 @@ def test_recommendation_guard_covers_new_intents_api(client: TestClient):
         data = resp.json()
         assert data["intent"] == "recommendation_request", f"Guard did not fire for: {message!r}"
         assert data["tool_calls"] == []
+
+
+# ── GET /chat/threads — Home page "Recent Chats" card ─────────────────────────
+
+def test_recent_threads_returns_real_rows_ordered_by_recency(client: TestClient, db):
+    from sqlalchemy import text as sqltext
+
+    total = db.execute(sqltext("SELECT COUNT(*) FROM chat_thread")).scalar()
+    assert total > 0, "chat_thread table is empty — nothing to verify against"
+
+    resp = client.get("/chat/threads?limit=10")
+    assert resp.status_code == 200
+    data = resp.json()
+    threads = data["threads"]
+    assert len(threads) == min(10, total)
+
+    for t in threads:
+        assert t["thread_id"]
+        assert t["title"]
+        assert t["updated_at"]
+
+    updated_ats = [t["updated_at"] for t in threads]
+    assert updated_ats == sorted(updated_ats, reverse=True), "threads must be most-recent-first"
+
+    # Cross-check against the DB directly for the single most recent thread
+    top_row = db.execute(sqltext(
+        "SELECT id, updated_at FROM chat_thread ORDER BY updated_at DESC LIMIT 1"
+    )).fetchone()
+    assert threads[0]["thread_id"] == str(top_row[0])
+
+
+def test_recent_threads_respects_limit(client: TestClient):
+    resp = client.get("/chat/threads?limit=3")
+    assert resp.status_code == 200
+    assert len(resp.json()["threads"]) == 3

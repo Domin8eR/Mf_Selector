@@ -301,9 +301,9 @@ def sandbox_run(body: SandboxRunRequest, db: Session = Depends(get_db)) -> Sandb
             score_change=round(sb_score - def_score, 1),
         ))
 
-    # as_of_date: prefer selfmade_scheme_ranking (more recent), fall back to ratios
+    # as_of_date: prefer selfmade_ranking_snapshot (more recent), fall back to ratios
     row = db.execute(text(
-        "SELECT MAX(as_of_date) FROM selfmade_scheme_ranking"
+        "SELECT MAX(snapshot_date) FROM selfmade_ranking_snapshot"
     )).scalar()
     as_of = row if row else date.today()
 
@@ -330,104 +330,7 @@ from pydantic import BaseModel
 
 from app.quant.metrics import percentile_rank
 from app.quant.formula_parser import validate_formula
-
-# ── Metric vocabulary for rule components ─────────────────────────────────────
-
-METRIC_VOCAB: dict[str, dict] = {
-    "information_ratio_3yr": {
-        "label": "IR₃ (3Y Information Ratio)",
-        "source": "selfmade_scheme_metrics",
-        "direction": "higher_better",
-        "window_months": 36,
-        "short_window": False,
-    },
-    "sharpe_ratio_3yr": {
-        "label": "Sharpe₃ (3Y Sharpe Ratio)",
-        "source": "selfmade_scheme_metrics",
-        "direction": "higher_better",
-        "window_months": 36,
-        "short_window": False,
-    },
-    "tracking_error_3yr": {
-        "label": "TE₃ (3Y Tracking Error)",
-        "source": "selfmade_scheme_metrics",
-        "direction": "lower_better",
-        "window_months": 36,
-        "short_window": False,
-    },
-    "ir_slope_6m_proxy": {
-        "label": "IR Slope (6m proxy)",
-        "source": "selfmade_scheme_metrics",
-        "direction": "higher_better",
-        "window_months": 6,
-        "short_window": True,
-    },
-    "jensens_alpha_3yr": {
-        "label": "Alpha₃ (3Y Jensen's Alpha)",
-        "source": "selfmade_scheme_metrics",
-        "direction": "higher_better",
-        "window_months": 36,
-        "short_window": False,
-    },
-    "fund_1yr_ret": {
-        "label": "1Y Fund Return",
-        "source": "selfmade_scheme_returns",
-        "direction": "higher_better",
-        "window_months": 12,
-        "short_window": True,
-    },
-    "fund_3yr_ret": {
-        "label": "3Y Fund Return (CAGR)",
-        "source": "selfmade_scheme_returns",
-        "direction": "higher_better",
-        "window_months": 36,
-        "short_window": False,
-    },
-    "fund_5yr_ret": {
-        "label": "5Y Fund Return (CAGR)",
-        "source": "selfmade_scheme_returns",
-        "direction": "higher_better",
-        "window_months": 60,
-        "short_window": False,
-    },
-    "active_1yr_ret": {
-        "label": "1Y Active Return",
-        "source": "selfmade_scheme_returns",
-        "direction": "higher_better",
-        "window_months": 12,
-        "short_window": True,
-    },
-    "active_3yr_ret": {
-        "label": "3Y Active Return (CAGR)",
-        "source": "selfmade_scheme_returns",
-        "direction": "higher_better",
-        "window_months": 36,
-        "short_window": False,
-    },
-    "active_5yr_ret": {
-        "label": "5Y Active Return (CAGR)",
-        "source": "selfmade_scheme_returns",
-        "direction": "higher_better",
-        "window_months": 60,
-        "short_window": False,
-    },
-    "expense_ratio_pct": {
-        "label": "Expense Ratio %",
-        "source": "selfmade_expense_ratio",
-        "direction": "lower_better",
-        "window_months": None,
-        "short_window": False,
-    },
-    "rank_delta_6m": {
-        "label": "Rank Change (6m)",
-        "source": "selfmade_ranking_snapshot",
-        "direction": "lower_better",
-        "window_months": 6,
-        "short_window": True,
-    },
-}
-
-_ALL_METRIC_COLS = list(METRIC_VOCAB.keys())
+from app.rankings.metric_vocab import METRIC_VOCAB, _ALL_METRIC_COLS  # noqa: F401 (re-exported for callers)
 
 
 def _load_universe(category: str, db: "Session") -> list[dict]:
@@ -1099,7 +1002,15 @@ def approve_version(body: ApproveRequest, db: Session = Depends(get_db)) -> dict
       1. Set the target version active, status=active.
       2. Set the previously active version status=superseded (keep its row + components).
       3. Write an audit_event row.
-    Returns the new active version's full detail.
+      4. Recompute every ranked fund against the newly-active version's real
+         weights (recompute_all_rankings) — synchronous: measured ~0.5-0.85s
+         across the full 2,238-fund/31-category universe in this environment,
+         well under the point where async dispatch would be worth the
+         complexity (and there is no real Celery worker/broker running here
+         to dispatch to anyway — see app/rankings/recompute.py). Approving a
+         rule version now actually changes what /rankings/category shows,
+         instead of silently doing nothing to the main ranked list.
+    Returns the new active version's full detail plus the recompute summary.
     """
     if not body.approver_name or not body.approver_name.strip():
         raise _HTTPException(status_code=422, detail="approver_name must not be blank")
@@ -1136,9 +1047,15 @@ def approve_version(body: ApproveRequest, db: Session = Depends(get_db)) -> dict
     """), {"approver": approver, "now": now, "id": body.rule_version_id})
 
     _write_audit_event(db, "approved", approver, body.rule_version_id, body.comment)
+
+    from app.rankings.recompute import recompute_all_rankings
+    recompute_result = recompute_all_rankings(db, rule_version_id=body.rule_version_id)
+
     db.commit()
 
-    return get_version_detail(body.rule_version_id, db)
+    detail = get_version_detail(body.rule_version_id, db)
+    detail["recompute"] = recompute_result
+    return detail
 
 
 # ── POST /rules/reject ────────────────────────────────────────────────────────

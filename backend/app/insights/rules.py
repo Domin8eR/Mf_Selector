@@ -9,8 +9,6 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.insights.calculator import (
-    compute_improvement_metric,
-    compute_ir_slope_proxy,
     get_holdings_metrics,
     get_overlap_metrics,
     get_rank_movement,
@@ -23,8 +21,8 @@ SORTINO_PERCENTILE_STRONG = 70
 SORTINO_PERCENTILE_WEAK = 40
 DOWNSIDE_CAPTURE_STRONG = 85
 DOWNSIDE_CAPTURE_WEAK = 105
-OUTPERFORMANCE_RATIO_STRONG = 60
-OUTPERFORMANCE_RATIO_WEAK = 45
+OUTPERFORMANCE_PERCENTILE_STRONG = 70
+OUTPERFORMANCE_PERCENTILE_WEAK = 40
 IR_SLOPE_IMPROVING = 0.03
 IR_SLOPE_WEAKENING = -0.03
 RANK_IMPROVEMENT_THRESHOLD = 3
@@ -88,10 +86,9 @@ class InsightRuleEngine:
         # ── Load current and previous snapshots ───────────────────────────────
         current_rows = self.db.execute(text("""
             SELECT s.schemecode, s.fund_name, s.rank_in_category, s.sharpe_score,
-                   sr.sharpe_ratio_3yr
+                   sm.sharpe_ratio_3yr
             FROM selfmade_ranking_snapshot s
-            LEFT JOIN selfmade_scheme_ranking sr
-                   ON sr.schemecode = s.schemecode AND sr.category = s.category
+            LEFT JOIN selfmade_scheme_metrics sm ON sm.schemecode = s.schemecode
             WHERE s.snapshot_date = :dt AND s.category = :cat
             ORDER BY s.rank_in_category
         """), {"dt": current_date, "cat": category_name}).fetchall()
@@ -258,16 +255,14 @@ class InsightRuleEngine:
 
         if improvers:
             best = improvers[0]
-            outperf_rows = self.db.execute(text("""
-                SELECT informationratio FROM ratio_3year_monthlyret
-                WHERE schemecode = :sc AND informationratio IS NOT NULL
-                ORDER BY ratiodate DESC LIMIT 12
-            """), {"sc": best["schemecode"]}).fetchall()
-            outperf_vals = [float(r[0]) for r in outperf_rows]
-            outperf_pct = (
-                round(sum(1 for v in outperf_vals if v > 0) / len(outperf_vals) * 100, 1)
-                if outperf_vals else 50.0
-            )
+            # Same real, populated selfmade_scheme_metrics.outperformed_3yr boolean
+            # FUND_3Y_PERFORMANCE_STRONG_V1 uses — not the sparse
+            # ratio_3year_monthlyret table (<=1 row/fund).
+            outperf_row = self.db.execute(text("""
+                SELECT outperformed_3yr FROM selfmade_scheme_metrics WHERE schemecode = :sc
+            """), {"sc": best["schemecode"]}).fetchone()
+            outperformed = outperf_row[0] if outperf_row else None
+            outperf_pct = 100.0 if outperformed is True else 0.0 if outperformed is False else 50.0
             results.append({
                 "template_id": "CAT_TOP_STRUCTURAL_IMPROVER_V1",
                 "variables": {
@@ -458,21 +453,57 @@ class InsightRuleEngine:
 
         # ── Group 3: 3Y information ratio (percentile-based 3-way split) ───────
         metrics_row = self.db.execute(text("""
-            SELECT information_ratio_3yr, sharpe_ratio_3yr, sortino_ratio_3yr
+            SELECT information_ratio_3yr, sharpe_ratio_3yr, sortino_ratio_3yr,
+                   ir_slope_6m_proxy
             FROM selfmade_scheme_metrics WHERE schemecode = :sc
         """), {"sc": schemecode}).fetchone()
 
+        # Percentile components come from the active rule version's own
+        # selfmade_ranking_contribution rows now (governed pipeline), not the
+        # retired selfmade_scheme_ranking table. Resolve the active rule
+        # version's IR / Active Return component ids once, up front.
+        active_rv_row = self.db.execute(text("""
+            SELECT id FROM selfmade_rule_version WHERE is_active = true ORDER BY id DESC LIMIT 1
+        """)).fetchone()
+        ir_component_id = ar_component_id = None
+        if active_rv_row:
+            comp_rows = self.db.execute(text("""
+                SELECT metric_column, id FROM selfmade_rule_component
+                WHERE rule_version_id = :rv AND metric_column IN ('information_ratio_3yr', 'active_3yr_ret')
+            """), {"rv": active_rv_row[0]}).fetchall()
+            comp_map = {r[0]: r[1] for r in comp_rows}
+            ir_component_id = comp_map.get("information_ratio_3yr")
+            ar_component_id = comp_map.get("active_3yr_ret")
+
         snap_row = self.db.execute(text("""
-            SELECT s.rank_in_category, sr.total_in_category, s.category,
-                   s.composite_score_v2, sr.pct_ir_3yr, s.rank_delta_6m
+            SELECT s.rank_in_category,
+                   (SELECT COUNT(*) FROM selfmade_ranking_snapshot s3
+                    WHERE s3.category = s.category AND s3.snapshot_date = s.snapshot_date) AS total_in_category,
+                   s.category, s.composite_score_v2, s.rank_delta_6m,
+                   (SELECT percentile_score FROM selfmade_ranking_contribution rc
+                    WHERE rc.snapshot_id = s.id AND rc.component_id = :ir_comp) AS pct_ir_3yr,
+                   (SELECT percentile_score FROM selfmade_ranking_contribution rc
+                    WHERE rc.snapshot_id = s.id AND rc.component_id = :ar_comp) AS pct_active_ret_3yr
             FROM selfmade_ranking_snapshot s
-            LEFT JOIN selfmade_scheme_ranking sr ON sr.schemecode = s.schemecode
             WHERE s.schemecode = :sc ORDER BY s.snapshot_date DESC LIMIT 1
-        """), {"sc": schemecode}).fetchone()
+        """), {"sc": schemecode, "ir_comp": ir_component_id, "ar_comp": ar_component_id}).fetchone()
 
         ir3 = float(metrics_row[0]) if metrics_row and metrics_row[0] is not None else None
         sortino3 = float(metrics_row[2]) if metrics_row and metrics_row[2] is not None else None
-        pct_ir = float(snap_row[4]) if snap_row and snap_row[4] is not None else None
+        # Same real, populated field Category Rankings' CAT_TOP_STRUCTURAL_IMPROVER_V1
+        # and CAT_TOP_RANKED_WEAKENING_V1 already read successfully — NOT the sparse
+        # ratio_3year_monthlyret table (<=1 row/fund, unusable for a 6-12 month trend).
+        ir_slope_real = float(metrics_row[3]) if metrics_row and metrics_row[3] is not None else None
+        pct_ir = float(snap_row[5]) if snap_row and snap_row[5] is not None else None
+        # Sortino has no governed rule component today (not in METRIC_VOCAB) —
+        # correctly None/insufficient-data rather than reading a frozen value
+        # from the retired selfmade_scheme_ranking table. Defaults to the
+        # same neutral-50 fallback as a missing pct_ir below; the practical
+        # effect is FUND_3Y_PERFORMANCE_STRONG_V1 won't fire on the Sortino
+        # dimension until Sortino re-enters the governed pipeline as a real
+        # rule component — a visible gap, not a silently stale number.
+        pct_sortino = None
+        pct_active_ret = float(snap_row[6]) if snap_row and snap_row[6] is not None else None
         rank_ic = int(snap_row[0]) if snap_row else None
         total_ic = int(snap_row[1]) if snap_row else None
 
@@ -490,25 +521,24 @@ class InsightRuleEngine:
                 results.append({"template_id": "FUND_3Y_IR_WEAK_V1", "variables": ir_v})
 
             # ── Group 4: 3Y overall performance scorecard (GOOD_3Y rule) ────────
-            outperf_rows = self.db.execute(text("""
-                SELECT informationratio FROM ratio_3year_monthlyret
-                WHERE schemecode = :sc AND informationratio IS NOT NULL
-                ORDER BY ratiodate DESC LIMIT 12
-            """), {"sc": schemecode}).fetchall()
-            outperf_vals = [float(r[0]) for r in outperf_rows]
-            outperf_pct = (
-                round(sum(1 for v in outperf_vals if v > 0) / len(outperf_vals) * 100, 1)
-                if outperf_vals else None
-            )
+            # Outperformance gates on category percentile (from the active rule
+            # version's own selfmade_ranking_contribution row) rather than an
+            # absolute magic-number cutoff, matching how the IR gate above
+            # already works. Sortino has no governed component yet (see
+            # pct_sortino assignment above) so it's always neutral for now.
+            # Missing percentile defaults to 50 (neutral), same convention as
+            # pct_ir_eff.
+            pct_sortino_eff = pct_sortino if pct_sortino is not None else 50.0
+            pct_active_ret_eff = pct_active_ret if pct_active_ret is not None else 50.0
             good_3y = (
                 pct_ir_eff >= IR_PERCENTILE_STRONG
-                and sortino3 is not None and sortino3 > 0.5
-                and outperf_pct is not None and outperf_pct >= OUTPERFORMANCE_RATIO_STRONG
+                and pct_sortino_eff >= SORTINO_PERCENTILE_STRONG
+                and pct_active_ret_eff >= OUTPERFORMANCE_PERCENTILE_STRONG
             )
             perf_v = {
                 **_base(fund_name), "ir_3y": round(ir3, 4),
                 "sortino_3y": round(sortino3, 4) if sortino3 is not None else "n/a",
-                "outperformance_ratio_3y_pct": outperf_pct if outperf_pct is not None else "n/a",
+                "outperformance_ratio_3y_pct": round(pct_active_ret_eff, 0),
                 "rank_in_category": rank_ic, "total_in_category": total_ic,
             }
             if good_3y:
@@ -516,8 +546,8 @@ class InsightRuleEngine:
             else:
                 positive = "3Y IR is in the top tier" if pct_ir_eff >= IR_PERCENTILE_STRONG else "3Y IR is acceptable"
                 concern = (
-                    "Sortino is below 0.5" if sortino3 is None or sortino3 <= 0.5
-                    else "outperformance ratio is below the 60% threshold" if outperf_pct is None or outperf_pct < OUTPERFORMANCE_RATIO_STRONG
+                    "Sortino percentile is below the top-tier threshold" if pct_sortino_eff < SORTINO_PERCENTILE_STRONG
+                    else "outperformance percentile is below the top-tier threshold" if pct_active_ret_eff < OUTPERFORMANCE_PERCENTILE_STRONG
                     else "not all risk-adjusted metrics agree"
                 )
                 results.append({
@@ -525,32 +555,33 @@ class InsightRuleEngine:
                     "variables": {**perf_v, "positive_metric_summary": positive, "negative_metric_summary": concern},
                 })
 
-        # ── Group 5: Trend (rank + IR slope + improvement metric together) ─────
-        ir_slope = compute_ir_slope_proxy(self.db, schemecode)
-        improvement_metric = compute_improvement_metric(self.db, schemecode)
+        # ── Group 5: Trend (rank + IR slope together) ───────────────────────────
+        # ir_slope_real: same selfmade_scheme_metrics.ir_slope_6m_proxy field
+        # CAT_TOP_STRUCTURAL_IMPROVER_V1/CAT_TOP_RANKED_WEAKENING_V1 already use
+        # successfully — not the sparse ratio_3year_monthlyret table (previously
+        # wired here via compute_ir_slope_proxy/compute_improvement_metric, which
+        # had <=1 row/fund and made this fallback fire for every fund).
+        # improvement_metric: there is no second real trend signal in this DB
+        # independent of ir_slope_6m_proxy — CMP_RECENT_IMPROVEMENT_LEADER_V1
+        # (fund comparison) already makes the same call (reuses ir_slope rather
+        # than computing a second number from sparse data); mirrored here rather
+        # than inventing a different rule for fund detail.
+        ir_slope = ir_slope_real
+        improvement_metric = ir_slope_real
         rank_delta_6m = int(snap_row[5]) if snap_row and snap_row[5] is not None else None
 
-        if ir_slope is None or improvement_metric is None:
+        if ir_slope is None:
             results.append({"template_id": "FUND_TREND_INSUFFICIENT_DATA_V1", "variables": _base(fund_name)})
         elif rank_delta_6m is None:
             results.append({"template_id": "FUND_TREND_INSUFFICIENT_DATA_V1", "variables": _base(fund_name)})
         else:
-            monthly_rows = self.db.execute(text("""
-                SELECT informationratio FROM ratio_3year_monthlyret
-                WHERE schemecode = :sc AND informationratio IS NOT NULL
-                ORDER BY ratiodate DESC LIMIT 12
-            """), {"sc": schemecode}).fetchall()
-            vals = [float(r[0]) for r in monthly_rows]
-            latest_6m = round(sum(vals[:6]) / len(vals[:6]), 4) if len(vals) >= 6 else None
-            prior_6m = round(sum(vals[6:12]) / len(vals[6:12]), 4) if len(vals) >= 12 else None
-
             trend_v = {
                 **_base(fund_name),
                 "ir_slope_3y": round(ir_slope, 4),
                 "improvement_metric": round(improvement_metric, 4),
                 "rank_delta_6m": rank_delta_6m,
-                "latest_6m_avg_rolling_ir": latest_6m if latest_6m is not None else "n/a",
-                "previous_6m_avg_rolling_ir": prior_6m if prior_6m is not None else "n/a",
+                "latest_6m_avg_rolling_ir": "n/a",
+                "previous_6m_avg_rolling_ir": "n/a",
             }
             if ir_slope > IR_SLOPE_IMPROVING and improvement_metric > 0 and rank_delta_6m <= -RANK_IMPROVEMENT_THRESHOLD:
                 results.append({
@@ -604,12 +635,13 @@ class InsightRuleEngine:
         fund_data: list[dict] = []
         for sc in schemecodes:
             row = self.db.execute(text("""
-                SELECT sr.schemecode, sr.amfi_name, sr.category,
-                       sr.rank_in_category, sr.rank_delta, sr.composite_score,
+                SELECT s.schemecode, s.fund_name, s.category,
+                       s.rank_in_category, s.rank_delta_6m, s.composite_score_v2,
                        sm.information_ratio_3yr, sm.ir_slope_6m_proxy
-                FROM selfmade_scheme_ranking sr
-                JOIN selfmade_scheme_metrics sm USING (schemecode)
-                WHERE sr.schemecode = :sc
+                FROM selfmade_ranking_snapshot s
+                JOIN selfmade_scheme_metrics sm ON sm.schemecode = s.schemecode
+                WHERE s.schemecode = :sc
+                ORDER BY s.snapshot_date DESC LIMIT 1
             """), {"sc": sc}).fetchone()
             if row:
                 fund_data.append({

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import { useSearchParams } from "react-router-dom"
-import { useMutation } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import {
   Send, Sparkles, Loader2, CheckCircle2, AlertCircle,
   ThumbsUp, ThumbsDown, Database, Calendar, X,
@@ -384,6 +384,7 @@ export default function ChatPage() {
   const ctxName       = searchParams.get("fund_name")
   const ctxCategory   = searchParams.get("category")
   const initialQuery  = searchParams.get("q") ?? undefined
+  const threadParam   = searchParams.get("thread") ?? undefined
   // Canonical follow-up payload (2026-07-18) from a compact insight card's
   // follow-up button — takes priority over the looser selected_entities
   // context below, since it already carries allowed_conclusion for the
@@ -407,6 +408,34 @@ export default function ChatPage() {
   const [lastDate, setLastDate] = useState<string | null>(null)
   const [llmAvailable, setLlmAvailable] = useState<boolean | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  // Load an existing thread's messages when arriving via Home's "Recent Chats" (?thread=<id>)
+  const threadQuery = useQuery({
+    queryKey: ["chat", "thread", threadParam],
+    queryFn: () => chatApi.getThreadMessages(threadParam!),
+    enabled: !!threadParam,
+  })
+
+  useEffect(() => {
+    if (!threadQuery.data) return
+    setThreadId(threadQuery.data.thread_id)
+    setMessages(threadQuery.data.messages.map((m): Message => ({
+      id: String(m.id),
+      role: m.role,
+      content: m.content,
+      messageId: m.id,
+      intent: m.intent ?? undefined,
+      resultType: m.result_component_type ?? undefined,
+      tableColumns: m.table_columns,
+      tableRows: m.table_rows,
+      chartType: m.chart_type as "bar" | "line" | null,
+      chartData: m.chart_data as { name: string; value: number }[] | null,
+      sourceTables: m.source_tables ?? undefined,
+      confidence: m.data_confidence ?? undefined,
+      nextActions: m.suggested_next_actions ?? undefined,
+    })))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadQuery.data])
 
   const sendMutation = useMutation({
     mutationFn: (message: string) => {

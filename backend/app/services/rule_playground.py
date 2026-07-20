@@ -5,8 +5,8 @@ caller's FilterParams.  Pure string/dict construction — no DB I/O — so it
 can be unit-tested without a live connection.
 
 CLAUDE.md rule 1: this module never computes metric values; it only adds
-filter conditions that reference pre-computed tables (selfmade_scheme_ranking,
-selfmade_scheme_metrics, etc.).
+filter conditions that reference pre-computed tables (selfmade_ranking_snapshot,
+selfmade_ranking_contribution, selfmade_scheme_metrics, etc.).
 
 Table aliases expected by the calling query in routers/rules.py:
   r   = mf_ratios_defaultbm
@@ -56,7 +56,7 @@ class FilterParams:
     # "5Y" → requires non-null mf_cagr_return.5yearret
     min_return_history: str | None = None  # "1Y" | "3Y" | "5Y"
 
-    # ── Structural Improvement — backed by selfmade_scheme_ranking ─────────
+    # ── Structural Improvement — backed by the governed ranking pipeline ──
     ir_percentile_min: float | None = None      # pct_ir_3yr >= x (0–100 scale)
     outperformance_ratio_min: float | None = None  # fraction [0,1]
     rank_movement_min: int | None = None        # rank_delta (stub — all NULL)
@@ -128,7 +128,7 @@ def build_universe_sql(filters: FilterParams) -> FilterSQL:  # noqa: C901
 
     # ── Track which extra aliases are JOINed to avoid double-joins ────────
     _joined_afd = False    # accord_fintech_scheme_details afd
-    _joined_sr  = False    # selfmade_scheme_ranking sr
+    _joined_sr  = False    # governed pct_ir_3yr subquery, aliased sr
     _joined_smm = False    # selfmade_scheme_metrics smm
     _joined_ctc = False    # category_taxonomy_current ctc
 
@@ -143,11 +143,22 @@ def build_universe_sql(filters: FilterParams) -> FilterSQL:  # noqa: C901
         return "afd"
 
     def _ensure_sr() -> str:
+        # pct_ir_3yr now comes from the active rule version's own
+        # selfmade_ranking_contribution row (governed pipeline), not the
+        # retired selfmade_scheme_ranking table. DISTINCT ON picks each
+        # fund's most recent real snapshot for the IR component.
         nonlocal _joined_sr
         if not _joined_sr:
             sql.extra_joins += (
-                " LEFT JOIN selfmade_scheme_ranking sr"
-                "  ON sr.schemecode::text = sm.scheme_id"
+                " LEFT JOIN ("
+                "  SELECT DISTINCT ON (s.schemecode) s.schemecode, rc.percentile_score AS pct_ir_3yr"
+                "  FROM selfmade_ranking_snapshot s"
+                "  JOIN selfmade_ranking_contribution rc ON rc.snapshot_id = s.id"
+                "  JOIN selfmade_rule_component rcomp"
+                "    ON rcomp.id = rc.component_id AND rcomp.metric_column = 'information_ratio_3yr'"
+                "  JOIN selfmade_rule_version rv ON rv.id = rcomp.rule_version_id AND rv.is_active = true"
+                "  ORDER BY s.schemecode, s.snapshot_date DESC"
+                " ) sr ON sr.schemecode::text = sm.scheme_id"
             )
             _joined_sr = True
         return "sr"
@@ -385,8 +396,8 @@ def build_universe_sql(filters: FilterParams) -> FilterSQL:  # noqa: C901
     # ── STRUCTURAL IMPROVEMENT: rank movement (stub) ──────────────────────
     if filters.rank_movement_min is not None:
         sql.warnings.append(
-            "rank_movement filter skipped — selfmade_scheme_ranking.rank_delta"
-            " is not yet populated (only one ranking run exists)"
+            "rank_movement filter skipped — selfmade_ranking_snapshot.rank_delta_6m"
+            " is null until a category has more than one real recompute run"
         )
 
     # ── STRUCTURAL IMPROVEMENT: improvement metric (stub) ─────────────────

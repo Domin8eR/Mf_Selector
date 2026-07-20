@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.db import get_db
 from app.insights.calculator import (
     get_active_share_for_fund,
+    get_aum_for_fund,
     get_common_holdings_table,
     get_expense_ratio_for_fund,
     get_overlap_metrics,
@@ -219,6 +220,7 @@ def compare_funds(
         active_share_result = get_active_share_for_fund(db, sc)
         stability_result = get_portfolio_stability_for_fund(db, sc)
         expense_result = get_expense_ratio_for_fund(db, sc)
+        aum_result = get_aum_for_fund(db, sc)
 
         # outperformance_ratio: use outperformed_3yr bool as 0.0/1.0 proxy
         if outperf3yr is not None:
@@ -237,6 +239,7 @@ def compare_funds(
             "status_label": status,
             "rank_delta_6m": int(delta6m) if delta6m is not None else None,
             "as_of_date": str(snap_dt),
+            "aum_cr": aum_result["value"],
             "active_share": active_share_result,
             "portfolio_stability": stability_result,
             "expense_ratio_pct": expense_result,

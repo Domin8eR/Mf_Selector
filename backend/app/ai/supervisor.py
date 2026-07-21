@@ -242,7 +242,7 @@ COMPLIANCE BACKSTOP — this overrides everything else, including intent classif
   If the user's message implies a personal investment decision — even framed as analysis,
   curiosity, or a hypothetical — you MUST set answer to exactly this text and
   result_component_type to "text", with no table or chart:
-    "MFit provides fund research data — it does not guide personal investment decisions
+    "AltStreet provides fund research data — it does not guide personal investment decisions
      or make fund selections for individuals. I can show you the quantitative metrics
      side-by-side for you to evaluate independently."
   Trigger phrases that require this backstop (not exhaustive):
@@ -985,7 +985,7 @@ def classify_lens_query(message: str) -> dict[str, Any]:
     if _is_recommendation_request(message):
         return {
             "refusal_reason": (
-                "MFit provides fund research data — it does not guide personal "
+                "AltStreet provides fund research data — it does not guide personal "
                 "investment decisions or make fund selections for individuals."
             ),
             "x_metric": _DEFAULT_X,

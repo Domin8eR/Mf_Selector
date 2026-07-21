@@ -6,10 +6,15 @@ interface InsightPanelProps {
   cards: InsightCardData[]
   isLoading: boolean
   title?: string
+  /** Card list layout. Defaults to the single-column stack used everywhere
+   *  except Fund Detail — "grid" is opt-in per caller and never changes this
+   *  default, so other pages using InsightPanel are unaffected. */
+  layout?: "list" | "grid"
 }
 
-export default function InsightPanel({ cards, isLoading, title }: InsightPanelProps) {
+export default function InsightPanel({ cards, isLoading, title, layout = "list" }: InsightPanelProps) {
   const sorted = [...cards].sort((a, b) => a.priority - b.priority)
+  const listClassName = layout === "grid" ? "grid grid-cols-1 md:grid-cols-2 gap-4" : "space-y-2"
 
   return (
     <div className="space-y-2">
@@ -26,7 +31,9 @@ export default function InsightPanel({ cards, isLoading, title }: InsightPanelPr
           No insights available for current selection.
         </div>
       ) : (
-        sorted.map(card => <InsightCard key={card.template_id} card={card} />)
+        <div className={listClassName}>
+          {sorted.map(card => <InsightCard key={card.template_id} card={card} />)}
+        </div>
       )}
     </div>
   )

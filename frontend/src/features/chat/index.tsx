@@ -207,7 +207,7 @@ function AssistantMessage({ msg, onSuggestClick }: { msg: Message; onSuggestClic
             {isReframe && (
               <div className="flex items-center gap-1.5 text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mb-2">
                 <Info className="h-3 w-3 flex-shrink-0" />
-                Investment advice is outside scope — showing what MFit can help with
+                Investment advice is outside scope — showing what AltStreet can help with
               </div>
             )}
 

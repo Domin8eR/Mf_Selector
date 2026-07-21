@@ -29,6 +29,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import InsightCard from "@/components/insights/InsightCard"
 import {
   workspaceApi,
   lensApi,
@@ -63,12 +64,19 @@ const QUADRANT_AREA_FILL: Record<string, string> = {
   "declining-weak": "#fee2e2",
 }
 
+// Real bucket_36 taxonomy values (see /rankings/categories). The pre-migration
+// "Equity — X" labels don't 400 here — worse, selfmade_ranking_snapshot still
+// has orphaned historical rows under those exact legacy labels (last written
+// 2026-07-09, the day before the taxonomy migration), so lens-scatter was
+// silently serving ~11-day-stale data instead of erroring. The "Debt — X"
+// duration categories are left as-is: there is no real bucket_36 equivalent
+// and no ranking data (old or new label) has ever existed for them.
 const CATEGORIES = [
-  "Equity — Large Cap",
-  "Equity — Mid Cap",
-  "Equity — Small Cap",
-  "Equity — Multi Cap",
-  "Equity — ELSS",
+  "Large Cap",
+  "Mid Cap",
+  "Small Cap",
+  "Multi Cap",
+  "ELSS",
   "Debt — Short Duration",
   "Debt — Medium Duration",
   "Debt — Long Duration",
@@ -142,48 +150,38 @@ function CustomTooltip({ active, payload }: {
   )
 }
 
-// AI Workspace / Lens cards are client-side generated (not backend insight_
-// snapshot rows) and out of scope for the 2026-07-18 compact-card migration
-// (Section 1-6 covers AIW/CAT/FUND/CMP/RULE/CHAT, not the Lens quadrant
-// explainer). Kept as its own lightweight renderer rather than adopting the
-// shared CompactInsightCard's expand/collapse + chips, since these cards
-// carry a single explanatory paragraph, not a compact+bullets structure.
-function InsightCard({ card }: { card: InsightCardData }) {
-  const colorMap: Record<string, string> = {
-    positive: "border-green-200 bg-green-50",
-    warning: "border-amber-200 bg-amber-50",
-    negative: "border-red-200 bg-red-50",
-    neutral: "border-blue-200 bg-blue-50",
-  }
-  return (
-    <div className={cn("rounded-lg border p-3 text-xs", colorMap[card.severity] ?? colorMap.neutral)}>
-      <p className="font-semibold text-gray-800 leading-snug mb-1">{card.compact_text}</p>
-      <p className="text-gray-600 leading-relaxed">{card.expanded_bullets.join(" ")}</p>
-    </div>
-  )
-}
-
 // ── Client-side insight generation (deterministic, no LLM) ──────────────────
+// Mirrors the backend's LENS_*_V1 templates (app/insights/templates.py) and
+// app.routers.metrics._lens_threshold_phrase — rendered through the shared
+// CompactInsightCard (components/insights/InsightCard.tsx) like every other
+// page, for a fresh (unsaved) query that hasn't round-tripped through
+// GET /workspaces/{id} yet.
+
+function lensThresholdPhrase(label: string, threshold: number): string {
+  if (threshold === 0) return "a flat (zero-change) line"
+  return `the category median (${label} = ${threshold.toFixed(3)})`
+}
 
 function buildClientInsights(
   scatter: LensScatterResponse,
   activeCategory: string,
   activeQuadrant: string | null,
 ): InsightCardData[] {
+  const fundCount = scatter.total_funds
+
   const explainer: InsightCardData = {
     template_id: "LENS_QUADRANT_EXPLAINER_V1",
     insight_code: "lens_quadrant_explainer",
     severity: "neutral",
     priority: 1,
-    compact_text: `**Axis guide:** ${scatter.x_label} (x) vs ${scatter.y_label} (y) — ${activeCategory}`,
+    compact_text: `**Axis guide:** ${scatter.x_label} (right) vs ${scatter.y_label} (up) — ${fundCount} funds in ${activeCategory}.`,
     expanded_bullets: [
-      `Each point is one fund in ${activeCategory}.`,
-      `X-axis: ${scatter.x_label}${scatter.x_description ? " — " + scatter.x_description : ""}.`,
-      `Y-axis: ${scatter.y_label}${scatter.y_description ? " — " + scatter.y_description : ""}.`,
-      `Quadrant thresholds: x splits at the category median (${scatter.x_label} = ${scatter.x_threshold.toFixed(3)}); ` +
-      `y splits at ${scatter.y_threshold.toFixed(4)} (positive = structurally improving, negative = declining).`,
+      `Each dot = one **${activeCategory}** fund (${fundCount} total).`,
+      `Further right = ${scatter.x_direction_phrase} (**${scatter.x_label}**).`,
+      scatter.y_axis_meaning,
+      `**Dashed lines** split funds into 4 groups using ${lensThresholdPhrase(scatter.x_label, scatter.x_threshold)} and ${lensThresholdPhrase(scatter.y_label, scatter.y_threshold)}.`,
     ],
-    chips: {},
+    chips: { fund_count: fundCount, category: activeCategory, x_label: scatter.x_label, y_label: scatter.y_label },
     facts_json: {},
     generated_by: "deterministic-template",
     prompt_tokens: 0,
@@ -193,6 +191,9 @@ function buildClientInsights(
   const targetQ = activeQuadrant ?? "improving-strong"
   const qLabel = QUADRANT_LABELS[targetQ] ?? targetQ
   const count = scatter.quadrant_counts[targetQ] ?? scatter.points.filter(p => p.quadrant === targetQ).length
+  const filterSummary =
+    `${scatter.x_label} ${targetQ.includes("strong") ? "≥" : "<"} median ` +
+    `AND ${scatter.y_label} ${targetQ.includes("improving") ? "≥" : "<"} ${scatter.y_threshold}`
 
   let candidateCard: InsightCardData
   if (count > 0) {
@@ -207,12 +208,13 @@ function buildClientInsights(
       insight_code: "lens_candidates_found",
       severity: "positive",
       priority: 5,
-      compact_text: `**${count} research candidate(s)** — ${qLabel} quadrant`,
+      compact_text: `**${count} research candidate(s)** found in the ${qLabel} quadrant of ${activeCategory}.`,
       expanded_bullets: [
-        `${count} fund(s) in ${activeCategory} appear in the ${qLabel} quadrant.`,
-        `Top by ${scatter.x_label}: ${topFunds}.`,
+        `**Filter:** ${filterSummary}`,
+        `**Category:** ${activeCategory}`,
+        `**Top by ${scatter.x_label}:** ${topFunds}`,
       ],
-      chips: {},
+      chips: { count, category: activeCategory, quadrant_label: qLabel },
       facts_json: {},
       generated_by: "deterministic-template",
       prompt_tokens: 0,
@@ -224,12 +226,13 @@ function buildClientInsights(
       insight_code: "lens_candidates_none",
       severity: "neutral",
       priority: 10,
-      compact_text: `**No funds** in the ${qLabel} quadrant — ${activeCategory}`,
+      compact_text: `**No funds** match ${qLabel} in ${activeCategory}.`,
       expanded_bullets: [
-        `The ${qLabel} quadrant returned zero funds in ${activeCategory}.`,
-        `Consider loosening the category filter or selecting a different quadrant.`,
+        `**Filter:** ${filterSummary}`,
+        `**Category:** ${activeCategory}`,
+        `**Try:** loosen the filter or switch quadrants.`,
       ],
-      chips: {},
+      chips: { category: activeCategory, quadrant_label: qLabel },
       facts_json: {},
       generated_by: "deterministic-template",
       prompt_tokens: 0,
@@ -255,7 +258,7 @@ export default function WorkspacePage() {
   // Query + filter
   const [queryInput, setQueryInput] = useState("")
   const [lensSpec, setLensSpec] = useState<LensSpec | null>(null)
-  const [category, setCategory] = useState("Equity — Large Cap")
+  const [category, setCategory] = useState("Large Cap")
   const [quadrantFilter, setQuadrantFilter] = useState<string | null>(null)
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false)
   const [showQuadrantDropdown, setShowQuadrantDropdown] = useState(false)
@@ -287,7 +290,7 @@ export default function WorkspacePage() {
     if (existingWsQuery.data && wsId !== null) {
       const ws = existingWsQuery.data
       setWorkspaceName(ws.name)
-      setCategory(ws.category ?? "Equity — Large Cap")
+      setCategory(ws.category ?? "Large Cap")
       setIsSaved(true)
       if (ws.query_text) setQueryInput(ws.query_text)
       if (ws.scatter?.x_metric) {
@@ -472,7 +475,7 @@ export default function WorkspacePage() {
               setQueryInput("")
               setLensSpec(null)
               setIsSaved(false)
-              setCategory("Equity — Large Cap")
+              setCategory("Large Cap")
               setQuadrantFilter(null)
               setSelectedPoint(null)
             }}
@@ -912,7 +915,7 @@ export default function WorkspacePage() {
               <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-2">
                 <BrainCircuit className="h-4 w-4 text-purple-500" />
                 <span className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
-                  AI Insight
+                  AI Insights
                 </span>
               </div>
               <div className="flex-1 overflow-y-auto p-4 space-y-3">

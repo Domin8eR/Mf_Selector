@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect } from "react"
 import { useSearchParams, useNavigate } from "react-router-dom"
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import {
-  X, Plus, Loader2, Sparkles, Save, Search, ChevronRight,
-  BookmarkCheck, AlertCircle, Info,
+  X, Plus, Loader2, Sparkles, Save, ChevronRight,
+  AlertCircle, Info,
 } from "lucide-react"
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
@@ -12,20 +12,25 @@ import {
 } from "recharts"
 import { cn } from "@/lib/utils"
 import {
-  rankingsV2Api, compareApi, insightsApi, metricsApiV2,
+  rankingsV2Api, insightsApi, metricsApiV2,
   type CompareFundEntry, type MetricResult, type CommonHolding,
 } from "@/lib/api"
 import { queryKeys } from "@/lib/query-keys"
 import InsightPanel from "@/components/insights/InsightPanel"
 import PocBadge from "@/components/insights/PocBadge"
+import FundPicker from "@/components/funds/FundPicker"
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const COLORS = ["#2563EB", "#16A34A", "#D97706", "#7C3AED"]
 
+// Real bucket_36 taxonomy values (see /rankings/categories) — these must
+// match exactly what /rankings/category accepts. The pre-migration legacy
+// "Equity — X" labels 400 against the current taxonomy now that the
+// frontend-side LEGACY_SNAPSHOT_CATEGORY translation shim was removed.
 const PICKER_CATEGORIES = [
-  "Equity — Large Cap",
-  "Equity — Mid Cap",
-  "Equity — Small Cap",
+  "Large Cap",
+  "Mid Cap",
+  "Small Cap",
 ] as const
 
 const STATUS_CLS: Record<string, string> = {
@@ -33,6 +38,7 @@ const STATUS_CLS: Record<string, string> = {
   Good:    "bg-blue-50 text-blue-700 border border-blue-200",
   Neutral: "bg-amber-50 text-amber-700 border border-amber-200",
   Weak:    "bg-red-50 text-red-700 border border-red-200",
+  "Insufficient Data": "bg-gray-50 text-gray-500 border border-gray-200",
 }
 
 const RADAR_AXES: Array<{ key: keyof import("@/lib/api").RadarAxes; label: string }> = [
@@ -152,95 +158,6 @@ function FundHeatmapRow({ sc, label, color }: { sc: number; label: string; color
   )
 }
 
-// ── Fund picker ───────────────────────────────────────────────────────────────
-
-function FundPickerDropdown({
-  selectedCodes,
-  onAdd,
-  onClose,
-}: {
-  selectedCodes: number[]
-  onAdd: (sc: number, name: string) => void
-  onClose: () => void
-}) {
-  const [category, setCategory]   = useState<string>("Equity — Large Cap")
-  const [search, setSearch]       = useState("")
-  const ref = useRef<HTMLDivElement>(null)
-
-  const { data, isLoading } = useQuery({
-    queryKey: queryKeys.rankings.v2Category(category),
-    queryFn: () => rankingsV2Api.getCategory({ category }),
-    staleTime: 5 * 60_000,
-  })
-
-  useEffect(() => {
-    function handler(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
-    }
-    document.addEventListener("mousedown", handler)
-    return () => document.removeEventListener("mousedown", handler)
-  }, [onClose])
-
-  const available = (data?.results ?? [])
-    .filter(r =>
-      !selectedCodes.includes(r.schemecode) &&
-      (!search || r.fund_name.toLowerCase().includes(search.toLowerCase()))
-    )
-    .slice(0, 40)
-
-  return (
-    <div
-      ref={ref}
-      className="absolute top-full left-0 mt-2 z-30 bg-white border border-gray-200 rounded-xl shadow-xl w-[380px] p-3"
-    >
-      <div className="flex items-center gap-2 mb-2">
-        <select
-          value={category}
-          onChange={e => { setCategory(e.target.value); setSearch("") }}
-          className="text-xs border border-gray-200 rounded-lg px-2 py-1 flex-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-        >
-          {PICKER_CATEGORIES.map(c => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
-        <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-      <div className="relative mb-2">
-        <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-gray-400" />
-        <input
-          autoFocus
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Search fund name…"
-          className="w-full text-xs border border-gray-200 rounded-lg pl-6 pr-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
-        />
-      </div>
-      <div className="max-h-56 overflow-y-auto divide-y divide-gray-50">
-        {isLoading && (
-          <div className="py-5 flex justify-center"><Loader2 className="h-4 w-4 animate-spin text-gray-300" /></div>
-        )}
-        {!isLoading && available.length === 0 && (
-          <p className="py-4 text-xs text-gray-400 text-center">No ranked funds found</p>
-        )}
-        {available.map(r => (
-          <button
-            key={r.schemecode}
-            onClick={() => { onAdd(r.schemecode, r.fund_name); onClose() }}
-            className="w-full text-left px-2 py-2 hover:bg-blue-50 group transition-colors"
-          >
-            <div className="text-xs font-medium text-gray-800 group-hover:text-blue-700 truncate">{r.fund_name}</div>
-            <div className="text-[10px] text-gray-400">
-              {r.amc_name} · Rank #{r.rank} · Score {r.composite_score.toFixed(1)}
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
 // ── Fund selector chips row ───────────────────────────────────────────────────
 
 function FundSelector({
@@ -296,10 +213,13 @@ function FundSelector({
               <Plus className="h-3.5 w-3.5" /> Add fund
             </button>
             {pickerOpen && (
-              <FundPickerDropdown
-                selectedCodes={selectedCodes}
-                onAdd={onAdd}
+              <FundPicker
+                categories={PICKER_CATEGORIES}
+                defaultCategory={PICKER_CATEGORIES[0]}
+                excludeCodes={selectedCodes}
+                onSelect={onAdd}
                 onClose={() => setPickerOpen(false)}
+                className="absolute top-full left-0 mt-2 z-30 bg-white border border-gray-200 rounded-xl shadow-xl w-[380px] p-3"
               />
             )}
           </div>
@@ -450,6 +370,11 @@ function LayoutA({
         <div className="px-4 pt-4 pb-2">
           <h2 className="text-sm font-semibold text-gray-800">Metrics Comparison</h2>
         </div>
+        {[fa, fb].filter(f => f.coverage_note).map(f => (
+          <div key={f.schemecode} className="mx-4 mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 leading-snug">
+            <span className="font-medium">{shortName(f.fund_name)}:</span> {f.coverage_note}
+          </div>
+        ))}
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
@@ -699,11 +624,18 @@ function LayoutB({
                 {f.status_label}
               </span>
             </div>
-            <div className="text-[10px] text-gray-400 mb-2">{f.amc_name} · {f.category}</div>
+            <div className="text-[10px] text-gray-400 mb-2">{f.amc_name}{f.category ? ` · ${f.category}` : ""}</div>
+            {f.coverage_note && (
+              <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2 leading-snug">
+                {f.coverage_note}
+              </p>
+            )}
             <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
               <div>
                 <div className="text-[10px] text-gray-400">Rank</div>
-                <div className="font-semibold text-gray-800">#{f.rank} <span className="text-[10px] text-gray-400">/ {f.total_in_category}</span></div>
+                <div className="font-semibold text-gray-800">
+                  {f.rank != null ? <>#{f.rank} <span className="text-[10px] text-gray-400">/ {f.total_in_category}</span></> : "—"}
+                </div>
               </div>
               <div>
                 <div className="text-[10px] text-gray-400">Score</div>
@@ -915,7 +847,6 @@ function AIInsightsCard({ codes }: { codes: number[] }) {
 export default function ComparePage() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  const qc = useQueryClient()
 
   const initCodes = (searchParams.get("funds") ?? "")
     .split(",")
@@ -954,23 +885,11 @@ export default function ComparePage() {
     if (Object.keys(patch).length) setFundNames(prev => ({ ...prev, ...patch }))
   }, [compareQ.data])
 
-  // Auto-save session (debounced, 2s)
-  const autoSave = useMutation({
-    mutationFn: (codes: number[]) =>
-      compareApi.createSession(codes.map(String), undefined, false),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.compare.sessions(false) }),
-  })
-  const saveMut = useMutation({
-    mutationFn: () =>
-      compareApi.createSession(selectedCodes.map(String), undefined, true),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.compare.sessions(true) }),
-  })
-
-  useEffect(() => {
-    if (selectedCodes.length < 2) return
-    const t = setTimeout(() => autoSave.mutate(selectedCodes), 2000)
-    return () => clearTimeout(t)
-  }, [JSON.stringify(selectedCodes)])
+  // Comparison history/save persistence (POST /compare/sessions) is not yet
+  // built — the comparison_session table doesn't exist (no migration was
+  // ever written). No auto-save trigger and no "Save comparison" mutation
+  // are wired up here; the button below is honestly disabled instead of
+  // erroring on click. See the disabled "Save comparison" button.
 
   const cData = compareQ.data
 
@@ -986,16 +905,13 @@ export default function ComparePage() {
         </div>
         {canCompare && (
           <button
-            onClick={() => saveMut.mutate()}
-            disabled={saveMut.isPending || saveMut.isSuccess}
-            className="flex items-center gap-1.5 text-sm bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 transition-colors disabled:opacity-60"
+            disabled
+            title="Comparison history isn't available yet — coming soon"
+            className="flex items-center gap-1.5 text-sm bg-gray-100 text-gray-400 px-4 py-2 rounded-xl cursor-not-allowed"
           >
-            {saveMut.isPending
-              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              : saveMut.isSuccess
-              ? <BookmarkCheck className="h-3.5 w-3.5" />
-              : <Save className="h-3.5 w-3.5" />}
-            {saveMut.isSuccess ? "Saved!" : "Save comparison"}
+            <Save className="h-3.5 w-3.5" />
+            Save comparison
+            <span className="text-xs bg-gray-200 px-1 rounded">coming soon</span>
           </button>
         )}
       </div>

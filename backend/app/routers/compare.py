@@ -159,10 +159,17 @@ def compare_funds(
 
     eval_date = body.evaluation_date or date.today()
 
+    # LEFT JOIN from the requested schemecodes (not an inner join keyed off
+    # selfmade_ranking_snapshot) so every requested fund gets a row — even
+    # one that fell out of the governed rule engine's strict-coverage
+    # universe (no real snapshot row). fund_name/amc_name fall back to
+    # altstreet_scheme_master, mirroring fund_summary_v2's same fallback,
+    # so an unranked fund still gets a real name instead of vanishing from
+    # the comparison or being stuck as "Fund {id}" forever on the frontend.
     fund_rows = db.execute(text("""
         SELECT
-            s.schemecode,
-            s.fund_name,
+            req.schemecode,
+            COALESCE(asm.scheme_name, 'Fund ' || req.schemecode::text) AS fund_name,
             s.rank_in_category,
             s.composite_score_v2,
             s.category,
@@ -178,16 +185,16 @@ def compare_funds(
             sr.fund_5yr_ret,
             COALESCE(a.s_name, 'Unknown AMC') AS amc_name,
             sm.outperformed_3yr
-        FROM selfmade_ranking_snapshot s
-        JOIN selfmade_scheme_metrics sm ON sm.schemecode = s.schemecode
-        LEFT JOIN selfmade_scheme_returns sr ON sr.schemecode = s.schemecode
-        LEFT JOIN altstreet_scheme_master asm ON asm.scheme_id::integer = s.schemecode
+        FROM unnest(CAST(:codes AS int[])) AS req(schemecode)
+        LEFT JOIN LATERAL (
+            SELECT * FROM selfmade_ranking_snapshot s2
+            WHERE s2.schemecode = req.schemecode AND s2.snapshot_date <= :ed
+            ORDER BY s2.snapshot_date DESC LIMIT 1
+        ) s ON TRUE
+        LEFT JOIN selfmade_scheme_metrics sm ON sm.schemecode = req.schemecode
+        LEFT JOIN selfmade_scheme_returns sr ON sr.schemecode = req.schemecode
+        LEFT JOIN altstreet_scheme_master asm ON asm.scheme_id::integer = req.schemecode
         LEFT JOIN amc_mst_new a ON a.amc_code = asm.amc::integer
-        WHERE s.schemecode = ANY(:codes)
-          AND s.snapshot_date = (
-              SELECT MAX(snapshot_date) FROM selfmade_ranking_snapshot
-              WHERE schemecode = s.schemecode AND snapshot_date <= :ed
-          )
         ORDER BY s.composite_score_v2 DESC NULLS LAST
     """), {"codes": body.schemecodes, "ed": str(eval_date)}).fetchall()
 
@@ -201,22 +208,39 @@ def compare_funds(
          ir3, sharpe3, te3, slope, active_ret,
          ret1y, ret3y, ret5y, amc, outperf3yr) = r
 
-        total_in_cat = db.execute(text("""
-            SELECT COUNT(*) FROM selfmade_ranking_snapshot
-            WHERE snapshot_date = :dt AND category = :cat
-        """), {"dt": snap_dt, "cat": cat}).scalar() or 1
+        composite_score = round(float(score), 2) if score is not None else None
+        coverage_note: str | None = None
 
-        pct = 1.0 - (rank - 1) / max(total_in_cat, 1)
-        if pct >= 0.85:
-            status = "Strong"
-        elif pct >= 0.50:
-            status = "Good"
-        elif pct >= 0.15:
-            status = "Neutral"
+        if rank is None:
+            # Not in the governed rule engine's ranked universe (e.g. missing
+            # a real 3Y information ratio / tracking error / active return) —
+            # degrade honestly rather than silently dropping the fund.
+            total_in_cat = None
+            status = "Insufficient Data"
+            coverage_note = (
+                "This fund has no structural rank — it does not currently meet the "
+                "governed rule engine's full data requirements (real 3Y information "
+                "ratio, tracking error, and active return are all required)."
+            )
         else:
-            status = "Weak"
+            total_in_cat = db.execute(text("""
+                SELECT COUNT(*) FROM selfmade_ranking_snapshot
+                WHERE snapshot_date = :dt AND category = :cat
+            """), {"dt": snap_dt, "cat": cat}).scalar() or 1
 
-        # ── Compute new per-fund metrics ──────────────────────────────────────
+            pct = 1.0 - (rank - 1) / max(total_in_cat, 1)
+            if pct >= 0.85:
+                status = "Strong"
+            elif pct >= 0.50:
+                status = "Good"
+            elif pct >= 0.15:
+                status = "Neutral"
+            else:
+                status = "Weak"
+
+        # ── Compute new per-fund metrics (holdings-based — independent of
+        #    governed ranking coverage, so these still work for an unranked
+        #    fund as long as it has real holdings data) ─────────────────────
         active_share_result = get_active_share_for_fund(db, sc)
         stability_result = get_portfolio_stability_for_fund(db, sc)
         expense_result = get_expense_ratio_for_fund(db, sc)
@@ -235,10 +259,11 @@ def compare_funds(
             "category": cat,
             "rank": rank,
             "total_in_category": total_in_cat,
-            "composite_score": round(float(score or 0), 2),
+            "composite_score": composite_score,
             "status_label": status,
+            "coverage_note": coverage_note,
             "rank_delta_6m": int(delta6m) if delta6m is not None else None,
-            "as_of_date": str(snap_dt),
+            "as_of_date": str(snap_dt) if snap_dt else None,
             "aum_cr": aum_result["value"],
             "active_share": active_share_result,
             "portfolio_stability": stability_result,

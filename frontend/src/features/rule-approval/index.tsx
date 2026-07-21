@@ -1,3 +1,11 @@
+// The standalone Rule Approval route/nav is decommissioned (folded into Rule
+// Playground's ApprovalDrawer — see features/rule-playground/ApprovalDrawer.tsx)
+// but this file is kept working and its presentational pieces (StatusBadge,
+// DiffTable, ActionForm, VersionDetailPanel, AuditLogStrip) are now imported
+// directly by ApprovalDrawer rather than duplicated — single source of truth
+// for the approve/reject/revert UI, reused by both. RuleApprovalPage itself
+// (default export) is left in place, unreferenced from routing, for
+// reversibility — same pattern as the Data Quality decommission.
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
@@ -17,7 +25,7 @@ import {
 
 // ── Status helpers ────────────────────────────────────────────────────────────
 
-const STATUS_STYLES: Record<string, string> = {
+export const STATUS_STYLES: Record<string, string> = {
   active:             "bg-green-100 text-green-800 border-green-200",
   pending_review:     "bg-amber-50  text-amber-700  border-amber-200",
   superseded:         "bg-gray-100  text-gray-500   border-gray-200",
@@ -25,7 +33,7 @@ const STATUS_STYLES: Record<string, string> = {
   changes_requested:  "bg-blue-50   text-blue-700   border-blue-200",
 }
 
-const STATUS_LABEL: Record<string, string> = {
+export const STATUS_LABEL: Record<string, string> = {
   active:             "Current Default",
   pending_review:     "Pending Review",
   superseded:         "Superseded",
@@ -33,14 +41,14 @@ const STATUS_LABEL: Record<string, string> = {
   changes_requested:  "Changes Requested",
 }
 
-const ACTION_ICONS: Record<string, string> = {
+export const ACTION_ICONS: Record<string, string> = {
   approved:           "✅",
   rejected:           "❌",
   changes_requested:  "🔄",
   reverted:           "↩️",
 }
 
-function StatusBadge({ status }: { status: string }) {
+export function StatusBadge({ status }: { status: string }) {
   return (
     <span className={cn(
       "text-[10px] font-semibold px-2 py-0.5 rounded-full border uppercase tracking-wide",
@@ -53,7 +61,7 @@ function StatusBadge({ status }: { status: string }) {
 
 // ── Live diff table ───────────────────────────────────────────────────────────
 
-function DiffTable({ diff }: { diff: DiffRow[] }) {
+export function DiffTable({ diff }: { diff: DiffRow[] }) {
   const visible = diff.filter(r => r.change_type !== "unchanged")
   const unchanged = diff.filter(r => r.change_type === "unchanged")
 
@@ -114,12 +122,12 @@ function DiffTable({ diff }: { diff: DiffRow[] }) {
 
 // ── Approver form ─────────────────────────────────────────────────────────────
 
-interface ActionFormProps {
+export interface ActionFormProps {
   pending: PendingRuleVersion
   onDone: () => void
 }
 
-function ActionForm({ pending, onDone }: ActionFormProps) {
+export function ActionForm({ pending, onDone }: ActionFormProps) {
   const qc = useQueryClient()
   const [approverName, setApproverName] = useState("")
   const [comment, setComment] = useState("")
@@ -222,12 +230,12 @@ function ActionForm({ pending, onDone }: ActionFormProps) {
 
 // ── Version detail panel ──────────────────────────────────────────────────────
 
-interface VersionDetailPanelProps {
+export interface VersionDetailPanelProps {
   version: RuleVersionSummary
   isActive: boolean
 }
 
-function VersionDetailPanel({ version, isActive }: VersionDetailPanelProps) {
+export function VersionDetailPanel({ version, isActive }: VersionDetailPanelProps) {
   const qc = useQueryClient()
   const [approverName, setApproverName] = useState("")
   const [comment, setComment] = useState("")
@@ -353,7 +361,7 @@ function VersionDetailPanel({ version, isActive }: VersionDetailPanelProps) {
 
 // ── Audit log strip ───────────────────────────────────────────────────────────
 
-function AuditLogStrip({ events }: { events: AuditHistoryEvent[] }) {
+export function AuditLogStrip({ events }: { events: AuditHistoryEvent[] }) {
   if (events.length === 0) {
     return (
       <p className="text-xs text-gray-400 py-3 text-center">

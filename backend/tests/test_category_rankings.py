@@ -185,12 +185,80 @@ def test_what_changed_has_three_tiles(client):
     assert len(data["tiles"]) == 3
 
 
-def test_ranking_history_has_six_dates(client):
-    r = client.get(f"/rankings/history?category={CAT}&top_n=5")
+def test_ranking_history_survives_category_taxonomy_rename(client):
+    """
+    /rankings/history must match funds by schemecode across snapshot_date,
+    not by literal category-string equality — category_taxonomy_current
+    was renamed partway through this build ("Equity — Large Cap" ->
+    "Large Cap"), and the real frontend always calls this endpoint with
+    the CURRENT taxonomy value (RANKING_CAT), never the legacy CAT string.
+    Before this was fixed, filtering on the raw category column silently
+    truncated Large Cap to its single most-recent snapshot (2026-07-19)
+    and hid 6 real months of prior history filed under "Equity — Large Cap".
+    """
+    r = client.get(f"/rankings/history?category={RANKING_CAT}&top_n=5")
     assert r.status_code == 200
     data = r.json()
-    assert len(data["dates"]) == 6, f"Expected 6 dates, got: {data['dates']}"
+    assert len(data["dates"]) >= 7, (
+        f"Expected the full real history (>=7 monthly snapshots), got: {data['dates']}"
+    )
     assert len(data["series"]) == 5
+
+
+def test_ranking_history_latest_mode_returns_exactly_top_n(client):
+    """mode=latest (default, used by the unchanged Rank History chart) is
+    scoped to the top-N funds as of the most recent snapshot only."""
+    r = client.get(f"/rankings/history?category={RANKING_CAT}&top_n=10&mode=latest")
+    data = r.json()
+    assert len(data["series"]) == 10
+    for s in data["series"]:
+        assert s["latest_rank"] is not None and s["latest_rank"] <= 10
+
+
+def test_ranking_history_union_mode_can_exceed_top_n(client):
+    """mode=union (Score History) is the union of top-N sets across every
+    real snapshot date — if top-N membership shifted month to month, this
+    naturally produces more than N funds. That's expected, not a bug."""
+    r = client.get(f"/rankings/history?category={RANKING_CAT}&top_n=10&mode=union")
+    data = r.json()
+    assert len(data["series"]) > 10, (
+        "Expected top-10 union across 7 real months to exceed 10 funds "
+        f"(membership shifted); got {len(data['series'])}"
+    )
+    # Funds no longer in the top-10 as of the latest snapshot are still
+    # included (real gap in their line, not silently dropped).
+    assert any(s["latest_rank"] is None or s["latest_rank"] > 10 for s in data["series"])
+
+
+def test_ranking_history_no_fabricated_scores_for_gaps(client):
+    """
+    Every data point's composite_score must be either a real float or None
+    (a real gap) — never a fabricated/interpolated placeholder. Large Cap's
+    specific top-10 union happens to have zero real gaps today (its ~473-
+    fund universe has been scored every month since inception, so union
+    members simply shift rank rather than drop out of the scored set) —
+    that's a property of this real data, not something to force. This test
+    instead pins the type contract, which holds regardless of whether a
+    given category's union currently has gaps.
+    """
+    r = client.get(f"/rankings/history?category={RANKING_CAT}&top_n=10&mode=union")
+    data = r.json()
+    assert len(data["series"]) > 0
+    for s in data["series"]:
+        for dp in s["data"]:
+            assert dp["composite_score"] is None or isinstance(dp["composite_score"], float)
+
+
+def test_ranking_history_insufficient_history_category_is_honest(client):
+    """A taxonomy bucket that only ever existed under the new naming
+    (e.g. Index Funds) genuinely has 1 real snapshot — must be reported
+    as-is (1 date), never padded/fabricated to look like more history."""
+    r = client.get("/rankings/history?category=Index Funds&top_n=10")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["dates"]) == 1, (
+        f"Index Funds should have exactly 1 real snapshot, got: {data['dates']}"
+    )
 
 
 # ── 4. Full 35-value category taxonomy (category_taxonomy_current) ──────────
@@ -293,6 +361,63 @@ def test_all_aggregate_equals_full_ranked_universe(client, db):
     r = client.get("/rankings/category", params={"category": "ALL", "page_size": 1})
     assert r.status_code == 200
     assert r.json()["total"] == expected_total
+
+
+# ── 5. Picker contract — FundPicker's "top 10 by default, search reaches
+#      beyond 10" behavior is implemented entirely via this endpoint's
+#      page_size/search params (no client-side truncation) ──────────────────
+
+def test_picker_default_page_size_10_returns_top_10_by_rank(client):
+    """FundPicker's no-search default request is page_size=10 — must return
+    exactly 10 results (Large Cap has 170+ ranked funds), non-decreasing
+    ranks starting at 1 (RANK() OVER ties mean the window isn't always a
+    contiguous 1..10 — e.g. two funds tied at rank 6 push the next to 8)."""
+    r = client.get(f"/rankings/category?category={RANKING_CAT}&page_size=10")
+    data = r.json()
+    assert data["total"] > 10
+    results = data["results"]
+    assert len(results) == 10
+    ranks = [f["rank"] for f in results]
+    assert ranks[0] == 1, f"First result should be rank 1, got: {ranks}"
+    assert ranks == sorted(ranks), f"Ranks should be non-decreasing: {ranks}"
+
+
+def test_picker_search_surfaces_fund_ranked_below_10th(client):
+    """A fund ranked well outside the top 10 (rank 14, 'Kotak Large Cap Fund
+    - Growth - Direct', schemecode 18629) must still be found when searching
+    by name — this is what lets FundPicker reach beyond its top-10 default."""
+    r = client.get(
+        f"/rankings/category?category={RANKING_CAT}&page_size=10&search=Growth+-+Direct"
+    )
+    data = r.json()
+    matched = {f["schemecode"]: f for f in data["results"]}
+    assert 18629 in matched, (
+        f"Expected schemecode 18629 in search results, got: {list(matched.keys())}"
+    )
+    assert matched[18629]["rank"] > 10, "Fixture assumption broken: fund should rank below 10th"
+
+
+# ── 6. Frontend/backend taxonomy contract ────────────────────────────────────
+# Regression (found 2026-07-20): Compare's fund picker hardcoded pre-migration
+# legacy category labels ("Equity — Large Cap") that no longer matched the
+# bucket_36 taxonomy after it was tightened to 35 real values, so every
+# category selection in the picker 400'd. This test encodes the contract
+# directly so a future taxonomy rename catches frontend/compare/index.tsx's
+# PICKER_CATEGORIES going stale again.
+
+FRONTEND_PICKER_CATEGORIES = ["Large Cap", "Mid Cap", "Small Cap"]
+
+
+def test_frontend_picker_categories_are_valid_taxonomy_values(client):
+    """Every category Compare's FundPicker hardcodes must be a real,
+    currently-accepted /rankings/category value."""
+    for cat in FRONTEND_PICKER_CATEGORIES:
+        assert cat in CATEGORY_TAXONOMY, (
+            f"'{cat}' (hardcoded in compare/index.tsx's PICKER_CATEGORIES) is not "
+            f"a real taxonomy value — the picker's category dropdown would 400."
+        )
+        r = client.get("/rankings/category", params={"category": cat, "page_size": 1})
+        assert r.status_code == 200, f"category={cat!r} failed: {r.status_code} {r.text}"
 
 
 def test_all_hybrid_is_genuinely_zero_today(client):

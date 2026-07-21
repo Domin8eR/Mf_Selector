@@ -72,8 +72,6 @@ def _generate_lens_insights(
     y_metric: str,
     x_label: str,
     y_label: str,
-    x_description: str,
-    y_description: str,
     x_threshold: float,
     y_threshold: float,
     quadrant_filter: str | None,
@@ -84,16 +82,19 @@ def _generate_lens_insights(
     Three templates — always: LENS_QUADRANT_EXPLAINER_V1,
     then either LENS_CANDIDATES_FOUND_V1 or LENS_CANDIDATES_NONE_V1.
     """
+    from app.routers.metrics import _lens_direction_phrase, _lens_y_axis_meaning, _lens_threshold_phrase
+
     cards = []
 
     explainer = render_insight_template("LENS_QUADRANT_EXPLAINER_V1", {
-        "x_label":       x_label,
-        "y_label":       y_label,
-        "category":      category,
-        "x_description": x_description,
-        "y_description": y_description,
-        "x_median":      x_threshold,
-        "y_threshold":   y_threshold,
+        "category":           category,
+        "fund_count":         len(points),
+        "x_label":            x_label,
+        "y_label":            y_label,
+        "x_direction_phrase": _lens_direction_phrase(x_metric, x_label),
+        "y_axis_meaning":     _lens_y_axis_meaning(y_metric, y_label),
+        "x_threshold_phrase": _lens_threshold_phrase(x_label, x_threshold),
+        "y_threshold_phrase": _lens_threshold_phrase(y_label, y_threshold),
     })
     if explainer:
         cards.append(explainer.model_dump())
@@ -218,7 +219,7 @@ def get_workspace(
     category  = ws["category"] or "Equity — Large Cap"
 
     from app.routers.metrics import (
-        _LENS_LABELS, _LENS_DESCRIPTIONS, _LENS_HIGHER_BETTER,
+        _LENS_LABELS, _LENS_HIGHER_BETTER,
         _LENS_Y_THRESHOLD, _assign_quadrant, _trend_note,
     )
 
@@ -296,8 +297,6 @@ def get_workspace(
         y_metric=y_metric,
         x_label=x_label,
         y_label=y_label,
-        x_description=_LENS_DESCRIPTIONS.get(x_metric, ""),
-        y_description=_LENS_DESCRIPTIONS.get(y_metric, ""),
         x_threshold=x_threshold,
         y_threshold=y_threshold,
         quadrant_filter=None,

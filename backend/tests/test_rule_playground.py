@@ -581,3 +581,167 @@ def test_submit_for_approval_requires_nonempty_rationale():
     }
     resp = _client.post("/rules/submit-for-approval", json=payload)
     assert resp.status_code == 422
+
+
+# ── 7. Fund-universe eligibility filters (real data, hits the real DB) ────────
+# Real coverage facts these tests assert against (see Step 0 of the filter-
+# catalogue session): Large Cap has 170 real funds; AUM real via
+# accord_fintech_mf_portfolio; expense ratio real via selfmade_expense_ratio
+# (full coverage); Sortino real via selfmade_scheme_metrics but PARTIAL
+# (~18/170 populated); IR slope real+full via selfmade_scheme_metrics.
+
+def test_eligible_count_no_filters_matches_full_category():
+    """An empty filter payload must match the entire real category — no
+    accidental narrowing when nothing is actually filtered."""
+    resp = _client.post("/rules/sandbox/eligible-count", json={
+        "category": "Large Cap", "filters": {},
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 170
+    assert body["eligible"] == 170
+
+
+def test_eligible_count_aum_filter_narrows_real_universe():
+    """AUM >= 1000cr must narrow Large Cap's real 170-fund universe, not
+    return 0 (regression check for the schemecode numeric/text cast bug
+    found during this session — accord_fintech_mf_portfolio.schemecode is
+    NUMERIC, so a naive ::text cast never matches altstreet_scheme_master's
+    text scheme_id) and not silently pass everyone either."""
+    resp = _client.post("/rules/sandbox/eligible-count", json={
+        "category": "Large Cap", "filters": {"aum_min_cr": 1000},
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 170
+    assert 0 < body["eligible"] < 170, (
+        f"Expected AUM filter to narrow (not zero-out or no-op) the universe, got {body}"
+    )
+
+    # Monotonic: a higher AUM floor must never admit MORE funds.
+    resp2 = _client.post("/rules/sandbox/eligible-count", json={
+        "category": "Large Cap", "filters": {"aum_min_cr": 5000},
+    })
+    assert resp2.json()["eligible"] <= resp.json()["eligible"]
+
+
+def test_eligible_count_expense_ratio_filter_narrows_real_universe():
+    """expense_ratio_max must use selfmade_expense_ratio (full real coverage
+    per Step 0), not the sparse legacy `expenceratio` vendor table (only
+    ~12/170 populated) — a filter reading the wrong table would either
+    silently pass everyone (NULL treated as pass) or narrow far more
+    aggressively than the real expense-ratio distribution warrants."""
+    resp = _client.post("/rules/sandbox/eligible-count", json={
+        "category": "Large Cap", "filters": {"expense_ratio_max": 1.0},
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 0 < body["eligible"] < 170
+
+
+def test_eligible_count_holding_concentration_filter_narrows_real_universe():
+    """Top-5 holdings concentration <= 40% (real accord_fintech_mf_portfolio
+    holdings data) must exclude at least the most concentrated fund(s)."""
+    resp = _client.post("/rules/sandbox/eligible-count", json={
+        "category": "Large Cap", "filters": {"holding_concentration_max": 40},
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["eligible"] < body["total"]
+
+
+def test_eligible_count_ir_slope_filter_narrows_real_universe():
+    """ir_slope_min uses selfmade_scheme_metrics.ir_slope_6m_proxy, which has
+    FULL real coverage (170/170) — a non-trivial threshold must narrow."""
+    resp = _client.post("/rules/sandbox/eligible-count", json={
+        "category": "Large Cap", "filters": {"ir_slope_min": 0.0},
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert 0 < body["eligible"] < 170
+
+
+def test_eligible_count_taxonomy_bucket_group_matches_all_equity_funds():
+    """Every Large Cap fund is an equity fund — bucket_group='ALL Equity'
+    must match 100%, a real sanity check that the taxonomy join is correct
+    (not narrowing funds that genuinely belong to the asset class)."""
+    resp = _client.post("/rules/sandbox/eligible-count", json={
+        "category": "Large Cap", "filters": {"bucket_group": "ALL Equity"},
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["eligible"] == body["total"] == 170
+
+
+def test_eligible_count_sortino_reflects_genuine_partial_coverage():
+    """Sortino is real but PARTIAL (~18/170 populated per Step 0) — a
+    threshold above the real max observed value must honestly return 0,
+    not error or silently pass everyone."""
+    resp = _client.post("/rules/sandbox/eligible-count", json={
+        "category": "Large Cap", "filters": {"sortino_min": 5.0},
+    })
+    assert resp.status_code == 200
+    assert resp.json()["eligible"] == 0
+
+    # A reachable threshold must produce a nonzero, non-full (partial-
+    # coverage-consistent) match count.
+    resp2 = _client.post("/rules/sandbox/eligible-count", json={
+        "category": "Large Cap", "filters": {"sortino_min": 0.3},
+    })
+    body2 = resp2.json()
+    assert 0 < body2["eligible"] < body2["total"]
+
+
+def test_unsupported_filter_field_is_ignored_not_applied():
+    """A filter field with no real backing data (e.g. large_cap_exposure_min
+    — confirmed Step 0 = NO real data, intentionally not modeled in
+    EligibilityFilters) must not silently narrow or error if a client
+    somehow sends it — Pydantic ignores unknown fields by default, so this
+    pins that the endpoint doesn't accidentally start accepting one later
+    without an explicit, deliberate schema change."""
+    resp = _client.post("/rules/sandbox/eligible-count", json={
+        "category": "Large Cap",
+        "filters": {"large_cap_exposure_min": 90},
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["eligible"] == body["total"] == 170
+
+
+def test_sandbox_run_v2_scores_only_the_filtered_universe():
+    """POST /rules/sandbox/run-v2's fund_count must equal exactly the
+    eligible-count for the same filters — the rule scores/ranks only the
+    filtered universe, not the full category."""
+    filters = {"aum_min_cr": 1000}
+    count_resp = _client.post("/rules/sandbox/eligible-count", json={
+        "category": "Large Cap", "filters": filters,
+    })
+    expected = count_resp.json()["eligible"]
+
+    run_resp = _client.post("/rules/sandbox/run-v2", json={
+        "category": "Large Cap",
+        "rule_components": [
+            {"metric_column": "information_ratio_3yr", "direction": "higher_better", "weight": 0.4},
+            {"metric_column": "sharpe_ratio_3yr", "direction": "higher_better", "weight": 0.25},
+            {"metric_column": "active_3yr_ret", "direction": "higher_better", "weight": 0.2},
+            {"metric_column": "tracking_error_3yr", "direction": "lower_better", "weight": 0.15},
+        ],
+        "filters": filters,
+    })
+    assert run_resp.status_code == 200
+    body = run_resp.json()
+    assert body["fund_count"] == expected
+    assert len(body["results"]) == expected
+
+
+def test_sandbox_run_v2_without_filters_is_unchanged():
+    """filters omitted (None) must behave exactly as before this session —
+    full category universe, no accidental narrowing for existing callers."""
+    resp = _client.post("/rules/sandbox/run-v2", json={
+        "category": "Large Cap",
+        "rule_components": [
+            {"metric_column": "information_ratio_3yr", "direction": "higher_better", "weight": 1.0},
+        ],
+    })
+    assert resp.status_code == 200
+    assert resp.json()["fund_count"] == 170

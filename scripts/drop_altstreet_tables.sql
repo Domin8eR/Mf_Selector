@@ -1,5 +1,5 @@
 -- ============================================================
--- Drop all MFit application tables (created by Alembic migrations)
+-- Drop all AltStreet application tables (created by Alembic migrations)
 -- Keeps the 65 original Accord Fintech vendor tables intact
 -- ============================================================
 

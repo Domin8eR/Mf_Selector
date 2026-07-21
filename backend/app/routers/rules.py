@@ -20,13 +20,14 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.db import get_db
 from app.schemas.rules import (
+    EligibilityFilters,
     RuleComponentOut,
     RuleVersionOut,
     SandboxRunRequest,
     SandboxRunResponse,
     SandboxRunResult,
 )
-from app.services.rule_playground import FilterParams, build_universe_sql
+from app.services.rule_playground import FilterParams, build_universe_sql, build_eligibility_sql
 
 router = APIRouter(prefix="/rules", tags=["rules"])
 
@@ -326,7 +327,7 @@ def sandbox_run(body: SandboxRunRequest, db: Session = Depends(get_db)) -> Sandb
 import json
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.quant.metrics import percentile_rank
 from app.quant.formula_parser import validate_formula
@@ -383,6 +384,28 @@ def _load_universe(category: str, db: "Session") -> list[dict]:
     return [dict(zip(_COLS, r)) for r in rows]
 
 
+def _eligible_schemecodes(filters: "EligibilityFilters", db: "Session") -> set[int]:
+    """
+    Compute the set of schemecodes that pass the given eligibility filters —
+    the fund UNIVERSE a rule is scored against, separate from the rule's own
+    metric weights. See build_eligibility_sql (app/services/rule_playground.py)
+    for the exact SQL per filter and app/schemas/rules.py's EligibilityFilters
+    for real-data-coverage notes per field.
+    """
+    filter_sql = build_eligibility_sql(filters)
+    cte_prefix = f"WITH {', '.join(filter_sql.ctes)} " if filter_sql.ctes else ""
+    where = f" AND {' AND '.join(filter_sql.where_clauses)}" if filter_sql.where_clauses else ""
+    sql_str = (
+        f"{cte_prefix}"
+        "SELECT sm.scheme_id::integer AS schemecode "
+        "FROM altstreet_scheme_master sm "
+        f"{filter_sql.extra_joins} "
+        f"WHERE TRUE{where}"
+    )
+    rows = db.execute(text(sql_str), filter_sql.params).fetchall()
+    return {r[0] for r in rows}
+
+
 # ── Pydantic schemas (v2 endpoints) ──────────────────────────────────────────
 
 class RuleComponentV2(BaseModel):
@@ -396,6 +419,15 @@ class SandboxRunV2Request(BaseModel):
     category: str = "Equity — Large Cap"
     rule_components: list[RuleComponentV2]
     evaluation_date: str | None = None
+    filters: EligibilityFilters | None = Field(
+        default=None,
+        description="Fund-universe eligibility filters, applied BEFORE scoring. None = no filtering (full category universe, unchanged from before this field existed).",
+    )
+
+
+class EligibleCountResponse(BaseModel):
+    eligible: int
+    total: int
 
 
 class SandboxFundResult(BaseModel):
@@ -554,6 +586,34 @@ def formula_validate(
     return result.to_dict()
 
 
+class EligibleCountRequest(BaseModel):
+    category: str = "Large Cap"
+    filters: EligibilityFilters
+
+
+# ── POST /rules/sandbox/eligible-count ────────────────────────────────────────
+
+@router.post("/sandbox/eligible-count", response_model=EligibleCountResponse)
+def sandbox_eligible_count(
+    body: EligibleCountRequest,
+    db: Session = Depends(get_db),
+) -> EligibleCountResponse:
+    """
+    Live 'N of M funds match current filters' count, for the Rule Playground
+    filter panel — cheap (a single COUNT-style query, no scoring) so it can be
+    called on every filter change via a debounced live preview, before the
+    user runs the full sandbox.
+    """
+    universe = _load_universe(body.category, db)
+    total = len(universe)
+    if total == 0:
+        return EligibleCountResponse(eligible=0, total=0)
+
+    eligible_codes = _eligible_schemecodes(body.filters, db)
+    eligible = sum(1 for f in universe if f["schemecode"] in eligible_codes)
+    return EligibleCountResponse(eligible=eligible, total=total)
+
+
 # ── POST /rules/sandbox/run-v2 ────────────────────────────────────────────────
 
 @router.post("/sandbox/run-v2")
@@ -603,6 +663,19 @@ def sandbox_run_v2(
             status_code=404,
             detail=f"No ranking data found for category '{body.category}'"
         )
+
+    # Apply eligibility filters BEFORE scoring — the rule only scores/ranks
+    # funds that pass the filters; fund_count/promoted/dropped/turnover below
+    # all reflect the filtered universe, not the full category.
+    total_before_filters = len(universe)
+    if body.filters is not None:
+        eligible = _eligible_schemecodes(body.filters, db)
+        universe = [f for f in universe if f["schemecode"] in eligible]
+        if not universe:
+            raise __import__("fastapi").HTTPException(
+                status_code=404,
+                detail="No funds in this category pass the current eligibility filters",
+            )
 
     # Cross-sectional percentile rank per metric
     for comp in valid_components:

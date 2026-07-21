@@ -406,3 +406,68 @@ class TestLayoutAStructure:
             assert md["status"] == "insufficient_data"
             assert dc["value"] is None
             assert dc["status"] == "insufficient_data"
+
+
+# ── Regression: funds outside governed ranking coverage must degrade
+#    honestly, not silently vanish from the comparison ───────────────────────
+#
+# Root cause (found 2026-07-20): the ranking-taxonomy migration tightened
+# selfmade_ranking_snapshot to a strict-governed-metric requirement, dropping
+# equity coverage from 1,920 to 825 funds. compare_funds' original query
+# INNER JOINed from selfmade_ranking_snapshot, so a requested schemecode with
+# no snapshot row (like 481, a real fund now outside strict coverage) was
+# silently absent from the response — no error, no reason, `funds` just had
+# fewer entries than requested, and `layout` was computed from the post-filter
+# count so a genuine 2-fund request could render as the multi-fund grid
+# layout with a single card and no explanation.
+
+RANKED_FUND = 19619       # real fund, in selfmade_ranking_snapshot (Large Cap)
+UNRANKED_FUND = 481       # real fund (Sectoral funds bucket_36), confirmed via
+                          # category_taxonomy_current to have NO row in the
+                          # latest selfmade_ranking_snapshot — outside strict
+                          # governed coverage today
+
+
+class TestUnrankedFundDegradesHonestly:
+    @pytest.fixture(scope="class")
+    def resp(self, client):
+        r = client.post("/compare/funds", json={"schemecodes": [RANKED_FUND, UNRANKED_FUND]})
+        assert r.status_code == 200
+        return r.json()
+
+    def test_both_requested_funds_are_present(self, resp):
+        """The unranked fund must not be silently dropped."""
+        schemecodes = {f["schemecode"] for f in resp["funds"]}
+        assert schemecodes == {RANKED_FUND, UNRANKED_FUND}
+
+    def test_layout_reflects_the_actual_2_fund_request(self, resp):
+        """2 requested funds -> layout 'A', not the multi-fund grid layout
+        with 1 real card that resulted from the old silent-drop bug."""
+        assert resp["layout"] == "A"
+
+    def test_unranked_fund_has_real_name_not_a_placeholder(self, resp):
+        unranked = next(f for f in resp["funds"] if f["schemecode"] == UNRANKED_FUND)
+        assert unranked["fund_name"] != f"Fund {UNRANKED_FUND}"
+        assert len(unranked["fund_name"]) > 5
+
+    def test_unranked_fund_shows_insufficient_data_with_a_reason(self, resp):
+        unranked = next(f for f in resp["funds"] if f["schemecode"] == UNRANKED_FUND)
+        assert unranked["status_label"] == "Insufficient Data"
+        assert unranked["rank"] is None
+        assert unranked["composite_score"] is None
+        assert unranked["coverage_note"], "Must explain why this fund has no rank"
+        assert "recommend" not in unranked["coverage_note"].lower()
+
+    def test_ranked_fund_is_unaffected(self, resp):
+        ranked = next(f for f in resp["funds"] if f["schemecode"] == RANKED_FUND)
+        assert ranked["status_label"] in {"Strong", "Good", "Neutral", "Weak"}
+        assert ranked["rank"] is not None
+        assert ranked["composite_score"] is not None
+        assert ranked["coverage_note"] is None
+
+    def test_holdings_based_metrics_still_independent_of_ranking_coverage(self, resp):
+        """active_share/portfolio_stability come from holdings data, not the
+        ranking snapshot — confirm the taxonomy migration didn't break them."""
+        ranked = next(f for f in resp["funds"] if f["schemecode"] == RANKED_FUND)
+        assert ranked["active_share"]["status"] == "ok"
+        assert ranked["portfolio_stability"]["status"] == "ok"

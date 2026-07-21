@@ -319,7 +319,7 @@ def run():
         ]:
             doc_date = AS_OF_DATE - timedelta(days=months_back * 30)
             url = (
-                f"https://storage.mfit.local/docs/{schemecode}/"
+                f"https://storage.altstreet.local/docs/{schemecode}/"
                 f"{doc_type}_{doc_date.strftime('%Y%m')}.pdf"
             )
             doc_rows.append((schemecode, doc_type, doc_date, url, status))

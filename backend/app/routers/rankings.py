@@ -88,6 +88,27 @@ def _status_label(rank: int, total: int) -> str:
     return "Weak"
 
 
+def _score_change_window_label(days: int | None) -> str:
+    """
+    Honest label for whatever real historical window is actually available —
+    NEVER hardcode "2Y"/"1Y": selfmade_ranking_snapshot only goes back to
+    2026-02-09 under the current RULE_ENGINE_V1 formula (~5 months as of
+    2026-07), so a fixed multi-year label would silently misrepresent a
+    much shorter real window. Recomputed from real data every request, so
+    the label grows honestly (5mo -> 1y -> ...) as more snapshots accrue.
+    """
+    if not days or days <= 0:
+        return "Insufficient history"
+    if days < 45:
+        return f"{days}d"
+    if days < 335:
+        return f"{round(days / 30.44)}mo"
+    return f"{round(days / 365.25, 1)}y"
+
+
+_PLAN_LABELS = {5: "Direct", 6: "Regular"}
+
+
 # ── /rankings/recent-runs ─────────────────────────────────────────────────────
 
 @router.get("/recent-runs")
@@ -242,6 +263,7 @@ def get_category_rankings(
                 RANK() OVER (ORDER BY s.composite_score_v2 DESC) AS rank_in_category,
                 COUNT(*) OVER () AS total_in_category,
                 s.composite_score_v2 AS composite_score,
+                s.snapshot_date AS cur_snapshot_date,
                 s.information_ratio_3yr,
                 s.rank_delta_6m,
                 sm.sharpe_ratio_3yr,
@@ -251,6 +273,9 @@ def get_category_rankings(
                 sr.fund_1yr_ret,
                 sr.fund_3yr_ret,
                 COALESCE(a.s_name, 'Unknown AMC') AS amc_name,
+                sd.plan AS plan_code,
+                earliest.earliest_score,
+                earliest.earliest_date,
                 (
                     SELECT (p.aum / 100.0) FROM accord_fintech_mf_portfolio p
                     WHERE p.schemecode = s.schemecode AND p.aum IS NOT NULL AND p.aum > 0
@@ -266,6 +291,21 @@ def get_category_rankings(
             LEFT JOIN selfmade_scheme_returns sr ON sr.schemecode = s.schemecode
             LEFT JOIN altstreet_scheme_master asm ON asm.scheme_id::integer = s.schemecode
             LEFT JOIN amc_mst_new a ON a.amc_code = asm.amc::integer
+            LEFT JOIN accord_fintech_scheme_details sd ON sd.schemecode = s.schemecode
+            -- Earliest real snapshot for this schemecode under the CURRENT
+            -- formula (RULE_ENGINE_V1), matched by schemecode only — NOT by
+            -- category label, because category_taxonomy_current was renamed
+            -- partway through (e.g. "Equity — Large Cap" -> "Large Cap") and
+            -- a fund's own score history is continuous across that rename.
+            -- Funds only present since the rename (no earlier row at all)
+            -- correctly get earliest_date = their own single snapshot, i.e.
+            -- zero real window -> "insufficient history" below, not a guess.
+            LEFT JOIN LATERAL (
+                SELECT s3.composite_score_v2 AS earliest_score, s3.snapshot_date AS earliest_date
+                FROM selfmade_ranking_snapshot s3
+                WHERE s3.schemecode = s.schemecode AND s3.sort_basis = 'RULE_ENGINE_V1'
+                ORDER BY s3.snapshot_date ASC LIMIT 1
+            ) earliest ON TRUE
             WHERE {taxonomy_filter}
         ) ranked
         WHERE (:aum_min IS NULL OR aum_cr >= :aum_min)
@@ -283,14 +323,30 @@ def get_category_rankings(
     start = (page - 1) * page_size
     paged = rows[start: start + page_size]
 
+    # Real window found across the WHOLE category (not just this page), so the
+    # column-header label reflects the actual data honestly regardless of
+    # which page is being viewed.
+    max_window_days = 0
+    for r in rows:
+        cur_dt, earliest_dt = r[5], r[17]
+        if cur_dt and earliest_dt:
+            max_window_days = max(max_window_days, (cur_dt - earliest_dt).days)
+    score_change_window_label = _score_change_window_label(max_window_days)
+
     results = []
     for r in paged:
-        (sc, name, rank, total_ic, score, ir3, delta6m, sharpe, te, slope,
-         active_ret, ret1y, ret3y, amc, aum_cr) = r
+        (sc, name, rank, total_ic, score, cur_dt, ir3, delta6m, sharpe, te, slope,
+         active_ret, ret1y, ret3y, amc, plan_code, earliest_score, earliest_dt, aum_cr) = r
+
+        score_change = None
+        if earliest_score is not None and earliest_dt and cur_dt and earliest_dt < cur_dt:
+            score_change = round(float(score) - float(earliest_score), 2)
+
         results.append({
             "schemecode": sc,
             "fund_name": name,
             "amc_name": amc,
+            "plan_label": _PLAN_LABELS.get(plan_code),
             "rank": int(rank),
             "composite_score": round(float(score or 0), 2),
             "status_label": _status_label(int(rank), total),
@@ -303,6 +359,7 @@ def get_category_rankings(
             "ret_1yr": round(float(ret1y), 4) if ret1y is not None else None,
             "ret_3yr": round(float(ret3y), 4) if ret3y is not None else None,
             "aum_cr": round(float(aum_cr), 2) if aum_cr is not None else None,
+            "score_change": score_change,
         })
 
     return {
@@ -316,6 +373,7 @@ def get_category_rankings(
         "total": total,
         "page": page,
         "page_size": page_size,
+        "score_change_window_label": score_change_window_label,
         "results": results,
     }
 
@@ -326,78 +384,116 @@ def get_category_rankings(
 def get_ranking_history(
     category: str = Query(default="Large Cap"),
     top_n: int = Query(default=10, ge=3, le=30, description="Track top-N funds"),
+    mode: str = Query(
+        default="latest",
+        description=(
+            "'latest': top-N funds as of the most recent snapshot only "
+            "(Rank History bump chart). 'union': union of top-N funds across "
+            "EVERY real snapshot date (Score History chart) — naturally more "
+            "than N funds if top-N membership shifted between snapshots."
+        ),
+    ),
     db: Session = Depends(get_db),
 ) -> dict:
     """
-    Return rank history across 6 evaluation dates for the top-N funds.
-    Used to render the bump chart in the Category Rankings page.
+    Return rank + composite_score_v2 history for the top-N funds in a
+    category, across every REAL snapshot date that exists for it.
+
+    Matched by schemecode (not raw category-label equality): category_
+    taxonomy_current was renamed partway through this build (e.g.
+    "Equity — Large Cap" -> "Large Cap"), and a fund's own snapshot history
+    is continuous across that rename. Filtering on the literal category
+    string here would silently truncate Large/Mid/Small Cap to their single
+    most-recent snapshot and hide 6 real months of history — this bit us
+    once already in /rankings/category before that endpoint was fixed the
+    same way (see Step 2 of the ranking-formula-unification session).
+
+    Categories that only ever existed under the new taxonomy naming (Index
+    Funds, Multi Cap, Large & Mid Cap, Thematic funds) correctly have <2
+    real dates here — callers must show that honestly, not assume 6+ months
+    of history always exists.
     """
-    # Resolve top-N schemecodes from the latest snapshot
-    latest_date = db.execute(text("""
-        SELECT MAX(snapshot_date) FROM selfmade_ranking_snapshot
-        WHERE category = :cat
-    """), {"cat": category}).scalar()
-
-    if not latest_date:
-        return {"category": category, "dates": [], "series": []}
-
-    top_codes = db.execute(text("""
-        SELECT schemecode, fund_name, rank_in_category
-        FROM selfmade_ranking_snapshot
-        WHERE snapshot_date = :dt AND category = :cat
-        ORDER BY rank_in_category
-        LIMIT :n
-    """), {"dt": latest_date, "cat": category, "n": top_n}).fetchall()
-
-    if not top_codes:
-        return {"category": category, "dates": [], "series": []}
-
-    code_set = [r[0] for r in top_codes]
-    name_map = {r[0]: r[1] for r in top_codes}
-
-    # Get at most 6 evaluation dates (newest first, then reverse for chronological order)
     eval_dates_raw = db.execute(text("""
-        SELECT DISTINCT snapshot_date
-        FROM selfmade_ranking_snapshot
-        WHERE category = :cat
-        ORDER BY snapshot_date DESC
-        LIMIT 6
+        SELECT DISTINCT s.snapshot_date
+        FROM selfmade_ranking_snapshot s
+        JOIN category_taxonomy_current t ON t.schemecode = s.schemecode
+        WHERE t.bucket_36 = :cat AND s.sort_basis = 'RULE_ENGINE_V1'
+        ORDER BY s.snapshot_date
     """), {"cat": category}).fetchall()
-    eval_dates = list(reversed(eval_dates_raw))
+    date_list = [str(r[0]) for r in eval_dates_raw]
 
-    date_list = [str(r[0]) for r in eval_dates]
+    if not date_list:
+        return {"category": category, "dates": [], "series": []}
 
-    # For each top fund, get its rank at each date
+    latest_date = date_list[-1]
+
+    if mode == "union":
+        code_rows = db.execute(text("""
+            SELECT DISTINCT s.schemecode, s.fund_name
+            FROM selfmade_ranking_snapshot s
+            JOIN category_taxonomy_current t ON t.schemecode = s.schemecode
+            WHERE t.bucket_36 = :cat AND s.sort_basis = 'RULE_ENGINE_V1'
+              AND s.rank_in_category <= :n
+        """), {"cat": category, "n": top_n}).fetchall()
+    else:
+        code_rows = db.execute(text("""
+            SELECT s.schemecode, s.fund_name
+            FROM selfmade_ranking_snapshot s
+            JOIN category_taxonomy_current t ON t.schemecode = s.schemecode
+            WHERE t.bucket_36 = :cat AND s.snapshot_date = :dt
+              AND s.sort_basis = 'RULE_ENGINE_V1'
+            ORDER BY s.rank_in_category
+            LIMIT :n
+        """), {"cat": category, "dt": latest_date, "n": top_n}).fetchall()
+
+    if not code_rows:
+        return {"category": category, "dates": date_list, "series": []}
+
+    code_set = [r[0] for r in code_rows]
+    name_map = {r[0]: r[1] for r in code_rows}
+
+    # For each fund, get its real rank + score at each real date — matched by
+    # schemecode only (same rename-proofing as above), no category filter
+    # needed here since code_set is already scoped to this category.
     history_rows = db.execute(text("""
-        SELECT schemecode, snapshot_date, rank_in_category
+        SELECT schemecode, snapshot_date, rank_in_category, composite_score_v2
         FROM selfmade_ranking_snapshot
-        WHERE category = :cat
-          AND schemecode = ANY(:codes)
+        WHERE sort_basis = 'RULE_ENGINE_V1' AND schemecode = ANY(:codes)
         ORDER BY schemecode, snapshot_date
-    """), {"cat": category, "codes": code_set}).fetchall()
+    """), {"codes": code_set}).fetchall()
 
-    # Build per-fund series
     from collections import defaultdict
-    fund_history: dict[int, dict[str, int]] = defaultdict(dict)
-    for sc, dt, rank in history_rows:
-        fund_history[sc][str(dt)] = rank
+    fund_history: dict[int, dict[str, tuple]] = defaultdict(dict)
+    for sc, dt, rank, score in history_rows:
+        fund_history[sc][str(dt)] = (rank, float(score) if score is not None else None)
 
     series = []
     for sc in code_set:
-        ranks_by_date = fund_history.get(sc, {})
+        by_date = fund_history.get(sc, {})
         data_points = [
-            {"date": d, "rank": ranks_by_date.get(d)}
+            {
+                "date": d,
+                "rank": by_date[d][0] if d in by_date else None,
+                "composite_score": round(by_date[d][1], 2) if d in by_date and by_date[d][1] is not None else None,
+            }
             for d in date_list
         ]
+        latest_rank = by_date[latest_date][0] if latest_date in by_date else None
         series.append({
             "schemecode": sc,
             "fund_name": name_map.get(sc, str(sc)),
-            "latest_rank": ranks_by_date.get(date_list[-1]) if date_list else None,
+            "latest_rank": latest_rank,
             "data": data_points,
         })
 
+    # Funds still ranked as of the latest date sort first (by rank); funds
+    # that dropped out of top-N by the latest date (union mode only) sort
+    # after, so the legend reads top-to-bottom by current standing.
+    series.sort(key=lambda s: (s["latest_rank"] is None, s["latest_rank"] or 0))
+
     return {
         "category": category,
+        "mode": mode,
         "dates": date_list,
         "series": series,
         "as_of_date": str(latest_date),

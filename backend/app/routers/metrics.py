@@ -925,6 +925,22 @@ _LENS_DESCRIPTIONS: dict[str, str] = {
     "fund_1yr_ret":          "1-year fund CAGR return (%)",
 }
 
+# Plain-language "what does a higher value mean" phrase per metric — feeds the
+# AI Workspace lens quadrant explainer insight card (LENS_QUADRANT_EXPLAINER_V1)
+# so the axis guide reads in plain English first, with the metric label as the
+# precise term next to it, rather than jargon-only.
+_LENS_DIRECTION_PHRASES: dict[str, str] = {
+    "information_ratio_3yr": "a stronger 3-year risk-adjusted return",
+    "composite_score_v2":    "a higher overall rule score",
+    "sharpe_score":          "a stronger risk-adjusted return (Sharpe)",
+    "rank_delta_6m":         "a bigger rank improvement over 6 months",
+    "ir_slope_6m_proxy":     "improving over the last 6 months",
+    "active_3yr_ret":        "higher excess return vs the benchmark",
+    "fund_3yr_ret":          "a higher 3-year return",
+    "fund_5yr_ret":          "a higher 5-year return",
+    "fund_1yr_ret":          "a higher 1-year return",
+}
+
 # For y-axis: whether higher value means "improving" direction
 _LENS_HIGHER_BETTER: dict[str, bool] = {
     "information_ratio_3yr": True,
@@ -944,6 +960,25 @@ _LENS_Y_THRESHOLD: dict[str, float] = {
     "ir_slope_6m_proxy": 0.0,
     "active_3yr_ret":    0.0,
 }
+
+
+def _lens_direction_phrase(metric: str, label: str) -> str:
+    return _LENS_DIRECTION_PHRASES.get(metric, f"a higher {label}")
+
+
+def _lens_y_axis_meaning(y_metric: str, y_label: str) -> str:
+    """Full sentence for the quadrant explainer's y-axis bullet — direction-
+    aware (some metrics, e.g. rank_delta_6m, improve as the value goes down)."""
+    phrase = _lens_direction_phrase(y_metric, y_label)
+    if _LENS_HIGHER_BETTER.get(y_metric, True):
+        return f"Higher up = **{phrase}**; lower = the opposite."
+    return f"Lower down = **{phrase}**; higher = the opposite."
+
+
+def _lens_threshold_phrase(label: str, threshold: float) -> str:
+    if threshold == 0:
+        return "a flat (zero-change) line"
+    return f"the category median ({label} = {threshold:.3f})"
 
 
 def _assign_quadrant(
@@ -1140,6 +1175,8 @@ def lens_scatter(
         "y_label":            _LENS_LABELS.get(y_metric, y_metric),
         "x_description":      _LENS_DESCRIPTIONS.get(x_metric, ""),
         "y_description":      _LENS_DESCRIPTIONS.get(y_metric, ""),
+        "x_direction_phrase": _lens_direction_phrase(x_metric, _LENS_LABELS.get(x_metric, x_metric)),
+        "y_axis_meaning":     _lens_y_axis_meaning(y_metric, _LENS_LABELS.get(y_metric, y_metric)),
         "x_threshold":        round(x_threshold, 6),
         "y_threshold":        round(y_threshold, 6),
         "quadrant_filter":    quadrant_filter,

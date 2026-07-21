@@ -1,11 +1,11 @@
-# CLAUDE.md — MFit Build Instructions
+# CLAUDE.md — AltStreet Build Instructions
 
 > This file is loaded automatically by Claude Code at the start of every session.
 > It contains the full project specification and milestone instructions.
 
 ---
 
-You are helping me build MFit — a client-rule-based mutual fund research
+You are helping me build AltStreet — a client-rule-based mutual fund research
 workspace for Indian funds. We are starting from an empty repo on my Mac.
 
 STEP 0 — READ THE DOCS FIRST.
@@ -13,7 +13,7 @@ Before writing a single line of code, read every file in the docs/ folder:
   - Process_Note_-_New.docx
   - AltStreet_MVP_Tech_Stack_Final_Recommendation.docx
   - AltStreet_MVP_Developer_End_to_End_Build_Guide_v8_with_screens.docx
-  - mfit_full_wireframes.html
+  - altstreet_full_wireframes.html
 
 Then post a summary back to me in exactly 5 bullets:
   1. The MVP scope in one sentence
@@ -27,7 +27,7 @@ do not proceed.
 
 == PROJECT IDENTITY ==
 
-Name: mfit (the folder is currently called Mf_Selector — that's fine)
+Name: altstreet (the folder is currently called Mf_Selector — that's fine)
 Purpose: client-rule-based mutual fund research workspace
 Out of scope for MVP: portfolio management, buy/sell recommendations,
 proprietary prediction models, personalized investor advice.

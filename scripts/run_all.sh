@@ -6,7 +6,7 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "=== MFit Data Foundation Pipeline ==="
+echo "=== AltStreet Data Foundation Pipeline ==="
 echo ""
 
 python3 "$DIR/step1_category_benchmark.py"

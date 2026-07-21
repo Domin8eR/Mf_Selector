@@ -24,10 +24,14 @@ import {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
+// Real bucket_36 taxonomy values (see /rankings/categories) — the legacy
+// "Equity — X" labels have orphaned pre-migration rows in
+// selfmade_ranking_snapshot (last written 2026-07-09), so /reports/generate
+// would silently build a report from ~11-day-stale data instead of erroring.
 const CATEGORIES = [
-  "Equity — Large Cap",
-  "Equity — Mid Cap",
-  "Equity — Small Cap",
+  "Large Cap",
+  "Mid Cap",
+  "Small Cap",
 ] as const
 
 const STEPS = ["Compose", "Preview", "Export"] as const

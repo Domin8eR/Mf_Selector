@@ -4,7 +4,7 @@ import {
   Home, BarChart2, TrendingUp, GitCompare,
   Sliders, Bell, ChevronDown, Sparkles,
   ChevronsLeft, ChevronsRight, Activity,
-  MessageSquare, ShieldCheck, Database, BrainCircuit,
+  MessageSquare, BrainCircuit,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Toaster } from "@/components/ui/toaster"
@@ -27,8 +27,11 @@ const NAV: NavItem[] = [
   { to: "/chat", label: "Research Chat", icon: MessageSquare },
   { to: "/workspace", label: "AI Workspace", icon: BrainCircuit },
   { to: "/rule-playground", label: "Rule Playground", icon: Sliders },
-  { to: "/rule-approval", label: "Rule Approval", icon: ShieldCheck },
-  { to: "/data-quality", label: "Data Quality", icon: Database },
+  // Rule Approval nav destination decommissioned — folded into Rule
+  // Playground's ApprovalDrawer (see routes/index.tsx for the route removal
+  // and reversibility note, same pattern as Data Quality below).
+  // Data Quality nav destination decommissioned — see routes/index.tsx for
+  // the matching route removal and reversibility note.
 ]
 
 export function Layout() {

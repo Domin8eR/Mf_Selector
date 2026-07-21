@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import {
   ArrowUp, ArrowDown, Minus, ChevronRight, ChevronUp, ChevronDown,
-  Search, Info, BarChart2, CheckSquare, MessageSquare, X,
+  Search, Info, BarChart2, CheckSquare, MessageSquare, X, Maximize2,
 } from "lucide-react"
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -13,9 +13,16 @@ import { cn } from "@/lib/utils"
 import {
   rankingsV2Api, insightsApi, metricsApiV2, schemesApi,
   type RankedFund, type ExplainComponent, type GrowthPoint,
+  type RankHistorySeries,
 } from "@/lib/api"
 import { queryKeys } from "@/lib/query-keys"
 import InsightPanel from "@/components/insights/InsightPanel"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { formatAxisDate, formatTooltipDate } from "@/features/funds/utils"
+import {
+  historySpanDays, historySpanLabel, lineColor, shortFundName, toScoreChartRows,
+  LINE_COLORS,
+} from "./utils"
 
 // ── Category options ──────────────────────────────────────────────────────────
 // The full category_taxonomy_current.bucket_36 / bucket_group taxonomy is
@@ -36,14 +43,9 @@ const STATUS_COLOURS: Record<string, string> = {
   Weak:    "bg-red-50    text-red-700    border border-red-200",
 }
 
-// ── Bump-chart colour palette (top-10 lines) ──────────────────────────────────
-const LINE_COLORS = [
-  "#6366f1","#10b981","#f59e0b","#ef4444","#3b82f6",
-  "#8b5cf6","#06b6d4","#f97316","#ec4899","#84cc16",
-]
-
 type SortKey = "rank" | "composite_score" | "ir_3yr" | "sharpe_3yr"
                | "active_ret_3yr" | "ir_slope_6m_proxy" | "tracking_error_3yr" | "aum_cr"
+               | "score_change"
 
 type DrawerTab = "overview" | "explain-rank"
 
@@ -51,6 +53,17 @@ type DrawerTab = "overview" | "explain-rank"
 function fmtNum(v: number | null | undefined, decimals = 2): string {
   if (v == null) return "—"
   return v.toFixed(decimals)
+}
+
+// Score change: HIGHER is better (unlike rank delta, where lower is better) —
+// positive = improvement (green), negative = decline (red). null means the
+// fund has only one real snapshot under the current formula (insufficient
+// history), not a zero change — never render it as "0".
+function fmtScoreChange(v: number | null | undefined): React.ReactNode {
+  if (v == null) return <span className="text-gray-400 text-[11px]">Insufficient history</span>
+  if (v > 0) return <span className="text-emerald-600 text-xs font-semibold">+{v.toFixed(1)}</span>
+  if (v < 0) return <span className="text-red-500 text-xs font-semibold">{v.toFixed(1)}</span>
+  return <span className="text-gray-400 text-xs">0.0</span>
 }
 
 function fmtDelta(v: number | null | undefined): React.ReactNode {
@@ -443,12 +456,75 @@ function FundPreviewDrawer({
   )
 }
 
-// ── Bump Chart ────────────────────────────────────────────────────────────────
-function BumpChart({ category }: { category: string }) {
+// ── Fullscreen chart overlay ───────────────────────────────────────────────────
+// Plain CSS/Tailwind entrance animation via the tailwindcss-animate plugin
+// already used by this app's Dialog/Sheet primitives (fade + zoom + slight
+// slide-up) — no new animation library. Escape key or the close button exits.
+function ChartFullscreenOverlay({
+  title,
+  onClose,
+  children,
+}: {
+  title: string
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose()
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6 animate-in fade-in duration-200"
+      onClick={onClose}
+    >
+      <div
+        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[85vh] overflow-auto p-6 animate-in zoom-in-95 slide-in-from-bottom-4 duration-300"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-gray-800">{title}</h3>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded hover:bg-gray-100"
+            aria-label="Close fullscreen"
+          >
+            <X className="h-4 w-4 text-gray-500" />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function MaximizeButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+      title="Maximize"
+      aria-label="Maximize chart"
+    >
+      <Maximize2 className="h-3 w-3" />
+    </button>
+  )
+}
+
+// ── Bump Chart (Rank History) ─────────────────────────────────────────────────
+function BumpChart({ category, height = 240, onMaximize }: {
+  category: string
+  height?: number
+  onMaximize?: () => void
+}) {
   const TOP_N = 10
   const { data, isLoading } = useQuery({
-    queryKey: queryKeys.rankings.history(category, TOP_N),
-    queryFn: () => rankingsV2Api.getHistory(category, TOP_N),
+    queryKey: queryKeys.rankings.history(category, TOP_N, "latest"),
+    queryFn: () => rankingsV2Api.getHistory(category, TOP_N, "latest"),
   })
 
   if (isLoading) {
@@ -475,23 +551,23 @@ function BumpChart({ category }: { category: string }) {
     return point
   })
 
-  const shortName = (name: string) => name.split(" ").slice(0, 3).join(" ")
+  const isShortSpan = historySpanDays(data.dates) < 365
 
   return (
     <div>
-      <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
-        Rank History — Top {TOP_N} (6 months)
-      </p>
-      <ResponsiveContainer width="100%" height={240}>
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+          Rank History — Top {TOP_N} ({historySpanLabel(data.dates)})
+        </p>
+        {onMaximize && <MaximizeButton onClick={onMaximize} />}
+      </div>
+      <ResponsiveContainer width="100%" height={height}>
         <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 4, left: -16 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
           <XAxis
             dataKey="date"
             tick={{ fontSize: 9, fill: "#9ca3af" }}
-            tickFormatter={(v: string) => {
-              const d = new Date(v)
-              return d.toLocaleString("default", { month: "short" })
-            }}
+            tickFormatter={(v: string) => formatAxisDate(v, isShortSpan)}
           />
           <YAxis
             reversed
@@ -500,8 +576,8 @@ function BumpChart({ category }: { category: string }) {
             domain={["dataMin - 1", "dataMax + 1"]}
           />
           <Tooltip
-            formatter={(v: unknown, name: string) => [`Rank ${v ?? "—"}`, shortName(name)]}
-            labelFormatter={(l: string) => `Date: ${l}`}
+            formatter={(v: unknown, name: string) => [`Rank ${v ?? "—"}`, shortFundName(name)]}
+            labelFormatter={(l: string) => `Date: ${formatTooltipDate(l)}`}
             contentStyle={{ fontSize: 10 }}
           />
           {data.series.map((s, i) => (
@@ -525,11 +601,160 @@ function BumpChart({ category }: { category: string }) {
               className="inline-block w-3 h-0.5 rounded"
               style={{ background: LINE_COLORS[i % LINE_COLORS.length] }}
             />
-            <span className="truncate" title={s.fund_name}>{shortName(s.fund_name)}</span>
+            <span className="truncate" title={s.fund_name}>{shortFundName(s.fund_name)}</span>
             <span className="ml-auto text-gray-400 shrink-0">#{s.latest_rank}</span>
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+// ── Score History chart ────────────────────────────────────────────────────────
+// Union of top-10 across every real snapshot date (not just the latest) —
+// naturally >10 lines if top-10 membership shifted month to month. A fund
+// missing a score on some date gets a REAL gap (no connectNulls) rather
+// than a fabricated bridge, since Recharts only draws between consecutive
+// non-null points when connectNulls is absent/false.
+function ScoreHistoryChart({ category, height = 240, onMaximize }: {
+  category: string
+  height?: number
+  onMaximize?: () => void
+}) {
+  const TOP_N = 10
+  const [hovered, setHovered] = useState<number | null>(null)
+  const { data, isLoading } = useQuery({
+    queryKey: queryKeys.rankings.history(category, TOP_N, "union"),
+    queryFn: () => rankingsV2Api.getHistory(category, TOP_N, "union"),
+  })
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-48 text-gray-400 text-xs">
+        Loading score history…
+      </div>
+    )
+  }
+
+  if (!data || data.dates.length < 2) {
+    const msg = !data || data.dates.length === 0
+      ? "No history data yet for this category."
+      : "Not enough history yet to show a trend — only 1 real snapshot exists for this category so far."
+    return (
+      <div className="flex flex-col items-center justify-center h-48 text-center px-4 gap-1">
+        <Info className="h-4 w-4 text-gray-300" />
+        <p className="text-xs text-gray-400 max-w-[220px]">{msg}</p>
+      </div>
+    )
+  }
+
+  const series: RankHistorySeries[] = data.series
+  const chartData = toScoreChartRows(data.dates, series)
+
+  const isShortSpan = historySpanDays(data.dates) < 365
+  const isLargeLegend = series.length > 15
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+          Score History — Top {TOP_N} union ({historySpanLabel(data.dates)})
+        </p>
+        {onMaximize && <MaximizeButton onClick={onMaximize} />}
+      </div>
+      <ResponsiveContainer width="100%" height={height}>
+        <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 4, left: -16 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+          <XAxis
+            dataKey="date"
+            tick={{ fontSize: 9, fill: "#9ca3af" }}
+            tickFormatter={(v: string) => formatAxisDate(v, isShortSpan)}
+          />
+          <YAxis
+            tick={{ fontSize: 9, fill: "#9ca3af" }}
+            tickCount={6}
+            domain={["dataMin - 2", "dataMax + 2"]}
+          />
+          <Tooltip
+            formatter={(v: unknown, name: string) => [v == null ? "No data" : (v as number).toFixed(1), shortFundName(name)]}
+            labelFormatter={(l: string) => `Date: ${formatTooltipDate(l)}`}
+            contentStyle={{ fontSize: 10 }}
+          />
+          {series.map((s, i) => (
+            <Line
+              key={s.schemecode}
+              type="monotone"
+              dataKey={s.fund_name}
+              stroke={lineColor(i)}
+              strokeWidth={hovered === s.schemecode ? 3 : s.latest_rank === 1 ? 2.5 : 1.5}
+              strokeOpacity={hovered == null || hovered === s.schemecode ? 1 : 0.15}
+              dot={false}
+              activeDot={{ r: 3 }}
+              // No connectNulls: a fund missing a score on some real date
+              // (wasn't top-10 that month, or is new since) shows a real
+              // visual gap rather than an implied/interpolated value.
+            />
+          ))}
+        </LineChart>
+      </ResponsiveContainer>
+      <div
+        className={cn(
+          "mt-2 space-y-0.5",
+          isLargeLegend && "max-h-32 overflow-y-auto pr-1"
+        )}
+      >
+        {series.map((s, i) => (
+          <div
+            key={s.schemecode}
+            className="flex items-center gap-1.5 text-[10px] text-gray-600 cursor-default rounded px-0.5 hover:bg-gray-50"
+            onMouseEnter={() => setHovered(s.schemecode)}
+            onMouseLeave={() => setHovered(null)}
+          >
+            <span
+              className="inline-block w-3 h-0.5 rounded shrink-0"
+              style={{ background: lineColor(i) }}
+            />
+            <span className="truncate" title={s.fund_name}>{shortFundName(s.fund_name)}</span>
+            <span className="ml-auto text-gray-400 shrink-0">
+              {s.latest_rank != null ? `#${s.latest_rank}` : "dropped out"}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Rank/Score History panel — tabs + shared fullscreen ───────────────────────
+function RankingHistoryPanel({ category }: { category: string }) {
+  const [tab, setTab] = useState<"rank" | "score">("rank")
+  const [fullscreen, setFullscreen] = useState(false)
+
+  return (
+    <div>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as "rank" | "score")}>
+        <TabsList className="h-8 mb-1">
+          <TabsTrigger value="rank" className="text-xs px-2.5 py-1">Rank History</TabsTrigger>
+          <TabsTrigger value="score" className="text-xs px-2.5 py-1">Score History</TabsTrigger>
+        </TabsList>
+        <TabsContent value="rank">
+          <BumpChart category={category} onMaximize={() => setFullscreen(true)} />
+        </TabsContent>
+        <TabsContent value="score">
+          <ScoreHistoryChart category={category} onMaximize={() => setFullscreen(true)} />
+        </TabsContent>
+      </Tabs>
+
+      {fullscreen && (
+        <ChartFullscreenOverlay
+          title={tab === "rank" ? "Rank History" : "Score History"}
+          onClose={() => setFullscreen(false)}
+        >
+          {tab === "rank"
+            ? <BumpChart category={category} height={480} />
+            : <ScoreHistoryChart category={category} height={480} />}
+        </ChartFullscreenOverlay>
+      )}
     </div>
   )
 }
@@ -615,12 +840,27 @@ function FundRow({
         </span>
       </td>
       <td className="px-3 py-2 max-w-[200px]">
-        <span
-          className="text-xs font-medium text-gray-900 line-clamp-2"
-          title={fund.fund_name}
-        >
-          {fund.fund_name}
-        </span>
+        <div className="flex items-start gap-1.5">
+          {fund.plan_label && (
+            <span
+              className={cn(
+                "shrink-0 mt-0.5 text-[9px] font-semibold px-1 py-0.5 rounded whitespace-nowrap",
+                fund.plan_label === "Direct"
+                  ? "bg-indigo-50 text-indigo-600 border border-indigo-200"
+                  : "bg-amber-50 text-amber-700 border border-amber-200"
+              )}
+              title={`${fund.plan_label} Plan — a different investable product (own NAV/expense ratio) from other plans of the same scheme`}
+            >
+              {fund.plan_label}
+            </span>
+          )}
+          <span
+            className="text-xs font-medium text-gray-900 line-clamp-2"
+            title={fund.fund_name}
+          >
+            {fund.fund_name}
+          </span>
+        </div>
       </td>
       <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">{fund.amc_name}</td>
       <td className="px-3 py-2 text-xs font-mono text-gray-700 text-right whitespace-nowrap">
@@ -650,6 +890,9 @@ function FundRow({
       </td>
       <td className="px-3 py-2 text-xs font-mono text-gray-800 text-right font-semibold">
         {fmtNum(fund.composite_score, 1)}
+      </td>
+      <td className="px-3 py-2 text-right whitespace-nowrap">
+        {fmtScoreChange(fund.score_change)}
       </td>
       <td className="px-3 py-2 text-center">
         {fmtDelta(fund.rank_delta_6m != null ? -fund.rank_delta_6m : null)}
@@ -940,6 +1183,12 @@ export default function CategoryRankingsPage() {
                   <th className={thClass} onClick={() => toggleSort("composite_score")}>
                     <span className="flex items-center gap-1">Score <SortIcon col="composite_score" active={sortKey} dir={sortDir} /></span>
                   </th>
+                  <th className={thClass} onClick={() => toggleSort("score_change")}>
+                    <span className="flex items-center gap-1">
+                      Δ Score ({rankData?.score_change_window_label ?? "…"})
+                      <SortIcon col="score_change" active={sortKey} dir={sortDir} />
+                    </span>
+                  </th>
                   <th className="text-center text-[10px] font-semibold text-gray-500 uppercase tracking-wide py-2 px-3">6m Δ</th>
                   <th className="w-8 px-3 py-2" />
                 </tr>
@@ -1002,7 +1251,7 @@ export default function CategoryRankingsPage() {
 
         {/* Right rail */}
         <div className="w-80 shrink-0 border-l border-gray-100 bg-white overflow-y-auto px-4 py-4 space-y-6">
-          <BumpChart category={category} />
+          <RankingHistoryPanel category={category} />
 
           {insightData && insightData.cards.length > 0 && (
             <div>

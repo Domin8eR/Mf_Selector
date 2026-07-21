@@ -148,6 +148,34 @@ class TestHoldings:
         weights = [h["weight_pct"] for h in r.json()["holdings"]]
         assert weights == sorted(weights, reverse=True), "Holdings should be descending by weight"
 
+    def test_limit_50_returns_full_portfolio_not_capped_at_10(self, client):
+        """Fund Detail's search-within-holdings feature fetches limit=50 once
+        and filters client-side; this only works if the endpoint actually
+        returns more than 10 rows for a fund with more than 10 holdings."""
+        r = client.get(f"/schemes/{SAMPLE_SC}/holdings?limit=50")
+        holdings = r.json()["holdings"]
+        assert len(holdings) > 10, (
+            f"Expected the full portfolio (>10 rows) at limit=50, got {len(holdings)}"
+        )
+
+    def test_search_beyond_top_10_finds_real_holding(self, client):
+        """'Dr Reddys Laboratories' is fund 19619's 11th-ranked holding by
+        weight (real selfmade_portfolio_holding data) — outside the top-10
+        default view. It must be absent at limit=10 and present at limit=50,
+        proving the frontend's full-list-then-filter approach can actually
+        reach it."""
+        r10 = client.get(f"/schemes/{SAMPLE_SC}/holdings?limit=10")
+        names_10 = [h["company_name"] for h in r10.json()["holdings"]]
+        assert "Dr Reddys Laboratories" not in names_10, (
+            "Fixture assumption broken: Dr Reddys Laboratories should rank below 10"
+        )
+
+        r50 = client.get(f"/schemes/{SAMPLE_SC}/holdings?limit=50")
+        holdings_50 = r50.json()["holdings"]
+        match = next((h for h in holdings_50 if h["company_name"] == "Dr Reddys Laboratories"), None)
+        assert match is not None, "Dr Reddys Laboratories missing from the full (limit=50) holdings list"
+        assert 3.0 < match["weight_pct"] < 4.0
+
     def test_sectors_to_80_calculation(self, client):
         """Verify that fewer than 15 sectors cover 80% of portfolio weight."""
         r = client.get(f"/schemes/{SAMPLE_SC}/holdings?limit=50")

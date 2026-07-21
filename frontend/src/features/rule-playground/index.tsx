@@ -3,22 +3,24 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   RotateCcw, Send, Loader2, AlertCircle, Plus, X,
   TrendingUp, TrendingDown, Minus, CheckCircle2, XCircle,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, ShieldCheck,
 } from "lucide-react"
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts"
 import { cn } from "@/lib/utils"
 import {
   rulesApi, schemesApi,
-  type SandboxFundResult, type FormulaValidationResult, type CategoryItem,
+  type SandboxFundResult, type FormulaValidationResult,
 } from "@/lib/api"
 import { queryKeys } from "@/lib/query-keys"
 import InsightPanel from "@/components/insights/InsightPanel"
 import PocBadge from "@/components/insights/PocBadge"
+import ApprovalDrawer, { type ApprovalTab } from "./ApprovalDrawer"
+import { FilterPanel, EMPTY_FILTERS, toEligibilityFilters, type FilterValues } from "./FilterPanel"
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const COLORS = ["#2563EB", "#16A34A", "#7C3AED", "#D97706", "#EF4444", "#0891B2"]
-const SESSION_KEY = "mfit_rule_playground_v2"
+const SESSION_KEY = "altstreet_rule_playground_v2"
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -188,9 +190,19 @@ export default function RulePlaygroundPage() {
     staleTime: 10 * 60 * 1000,
   })
 
-  const { data: categoryData } = useQuery({
-    queryKey: ["schemes", "categories"],
-    queryFn: () => schemesApi.listCategories(),
+  const { data: categories36Data } = useQuery({
+    queryKey: ["schemes", "categories-36"],
+    queryFn: () => schemesApi.listCategories36(),
+    staleTime: Infinity,
+  })
+  const { data: amcsData } = useQuery({
+    queryKey: ["rules", "amcs"],
+    queryFn: () => rulesApi.listAmcs(),
+    staleTime: Infinity,
+  })
+  const { data: sectorsData } = useQuery({
+    queryKey: ["rules", "sectors"],
+    queryFn: () => rulesApi.listSectors(),
     staleTime: Infinity,
   })
 
@@ -206,6 +218,17 @@ export default function RulePlaygroundPage() {
   const [formulaValidations, setFormulaValidations] = useState<
     Record<string, FormulaValidationResult>
   >({})
+
+  // ── Fund-universe eligibility filters ──────────────────────────────────────
+  const [filterValues, setFilterValues] = useState<FilterValues>(EMPTY_FILTERS)
+  // Genuine time-based debounce (no existing debounce-by-delay pattern in this
+  // app to reuse — Category Rankings' search box debounces on Enter-press,
+  // not elapsed time, which wouldn't feel "live" for sliders/number inputs).
+  const [debouncedFilterValues, setDebouncedFilterValues] = useState<FilterValues>(EMPTY_FILTERS)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedFilterValues(filterValues), 400)
+    return () => clearTimeout(t)
+  }, [filterValues])
 
   // ── Sandbox run state ────────────────────────────────────────────────────────
   const [sandboxRun, setSandboxRun] = useState<{
@@ -223,11 +246,28 @@ export default function RulePlaygroundPage() {
   // ── UI state ─────────────────────────────────────────────────────────────────
   const [showRationaleDialog, setShowRationaleDialog] = useState(false)
   const [submitResult, setSubmitResult] = useState<{
+    rule_version_id: number
     version_label: string
     status: string
     message: string
   } | null>(null)
   const [showAllResults, setShowAllResults] = useState(false)
+
+  // ── Approval drawer ──────────────────────────────────────────────────────────
+  // Same query key the drawer's Pending Review tab uses ("rules","pending"),
+  // so this badge and the drawer's own list share one cache entry and stay in
+  // sync — the count here is always the real live GET /rules/pending length,
+  // never a locally-tracked/derived approximation.
+  const [approvalDrawer, setApprovalDrawer] = useState<{
+    tab: ApprovalTab
+    focusRuleVersionId?: number | null
+  } | null>(null)
+  const pendingCountQ = useQuery({
+    queryKey: ["rules", "pending"],
+    queryFn: rulesApi.getPending,
+    staleTime: 30_000,
+  })
+  const pendingCount = pendingCountQ.data?.length ?? 0
 
   // ── Initialise from default data when it arrives ──────────────────────────
   useEffect(() => {
@@ -346,6 +386,15 @@ export default function RulePlaygroundPage() {
     },
   })
 
+  // ── Live "N of M funds match" eligible-count preview ───────────────────────
+  // Cheap COUNT-only query (no scoring) — fires on the debounced filter value
+  // so it updates live as the user adjusts filters, before Run Sandbox.
+  const eligibleCountQ = useQuery({
+    queryKey: ["rules", "eligible-count", category, debouncedFilterValues],
+    queryFn: () => rulesApi.eligibleCount(category, toEligibilityFilters(debouncedFilterValues)),
+    staleTime: 10_000,
+  })
+
   // ── Sandbox run mutation ───────────────────────────────────────────────────
   const sandboxMutation = useMutation({
     mutationFn: () =>
@@ -357,6 +406,7 @@ export default function RulePlaygroundPage() {
           weight: c.weight_pct / 100,
           formula_text: c.formula_text || undefined,
         })),
+        filters: toEligibilityFilters(filterValues),
       }),
     onSuccess: data => {
       setSandboxRun({
@@ -400,6 +450,9 @@ export default function RulePlaygroundPage() {
     onSuccess: data => {
       setSubmitResult(data)
       setShowRationaleDialog(false)
+      // Refresh the persistent Approvals badge immediately — otherwise it
+      // would silently lag up to `staleTime` behind the real pending count.
+      queryClient.invalidateQueries({ queryKey: ["rules", "pending"] })
     },
   })
 
@@ -487,9 +540,6 @@ export default function RulePlaygroundPage() {
     color: COLORS[i % COLORS.length],
   }))
 
-  // ── Categories for top bar ────────────────────────────────────────────────
-  const categories: CategoryItem[] = categoryData?.categories ?? []
-
   // ── Sorted results split into default vs sandbox ──────────────────────────
   const defaultSorted = sandboxRun
     ? [...sandboxRun.results].sort((a, b) => a.default_rank - b.default_rank)
@@ -530,8 +580,12 @@ export default function RulePlaygroundPage() {
             }}
             className="text-sm border border-gray-200 rounded-xl px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
-            {categories.map(cat => (
-              <option key={cat.id} value={cat.id}>{cat.name}</option>
+            {(categories36Data ?? []).map(g => (
+              <optgroup key={g.group} label={g.group}>
+                {g.buckets.map(b => (
+                  <option key={b.id} value={b.id}>{b.name} ({b.count})</option>
+                ))}
+              </optgroup>
             ))}
           </select>
 
@@ -541,6 +595,24 @@ export default function RulePlaygroundPage() {
           >
             <RotateCcw className="h-3.5 w-3.5" />
             Reset to Default
+          </button>
+
+          {/* Persistent entry point for reviewing ANY pending submission —
+              independent of the sandbox editor above, so an approver can
+              open this to review a colleague's submission without having
+              just submitted anything themselves. */}
+          <button
+            onClick={() => setApprovalDrawer({ tab: "pending" })}
+            title="Review pending rule submissions from any category"
+            className="flex items-center gap-1.5 text-sm border border-gray-200 rounded-xl px-4 py-2 hover:bg-gray-50 transition-colors"
+          >
+            <ShieldCheck className="h-3.5 w-3.5" />
+            Approvals
+            {pendingCount > 0 && (
+              <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-semibold">
+                {pendingCount}
+              </span>
+            )}
           </button>
 
           <button
@@ -568,7 +640,7 @@ export default function RulePlaygroundPage() {
       {submitResult && (
         <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 flex items-start gap-3">
           <CheckCircle2 className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
-          <div>
+          <div className="flex-1">
             <p className="text-sm font-semibold text-green-800">
               Rule set submitted — {submitResult.version_label}
             </p>
@@ -576,12 +648,37 @@ export default function RulePlaygroundPage() {
               Status: <code className="font-mono">{submitResult.status}</code>. This version
               is in pending review and will NOT affect live rankings until explicitly approved.
             </p>
+            <button
+              onClick={() => setApprovalDrawer({
+                tab: "pending",
+                focusRuleVersionId: submitResult.rule_version_id,
+              })}
+              className="mt-2 text-xs font-semibold text-green-800 border border-green-300 rounded-lg px-3 py-1.5 hover:bg-green-100 transition-colors"
+            >
+              View in approval queue →
+            </button>
           </div>
         </div>
       )}
 
-      {/* ── 3-column layout ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-3 gap-4 items-start">
+      {/* ── 4-column layout: Filters | Edit Rules | Validate | Compare ──────── */}
+      <div className="grid grid-cols-4 gap-4 items-start">
+
+        {/* ═══ Column 0 — Fund-universe eligibility Filters ═════════════════ */}
+        <FilterPanel
+          values={filterValues}
+          onChange={setFilterValues}
+          categories36={categories36Data}
+          amcs={amcsData ?? []}
+          sectors={sectorsData}
+          eligibleCount={
+            eligibleCountQ.data
+              ? { ...eligibleCountQ.data, loading: eligibleCountQ.isFetching }
+              : eligibleCountQ.isLoading
+              ? { eligible: 0, total: 0, loading: true }
+              : null
+          }
+        />
 
         {/* ═══ Column 1 — Edit Rules ════════════════════════════════════════ */}
         <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
@@ -1055,6 +1152,15 @@ export default function RulePlaygroundPage() {
         onSubmit={rationale => submitMutation.mutate(rationale)}
         isSubmitting={submitMutation.isPending}
       />
+
+      {/* ── Approval drawer ──────────────────────────────────────────────────── */}
+      {approvalDrawer && (
+        <ApprovalDrawer
+          initialTab={approvalDrawer.tab}
+          focusRuleVersionId={approvalDrawer.focusRuleVersionId}
+          onClose={() => setApprovalDrawer(null)}
+        />
+      )}
     </div>
   )
 }

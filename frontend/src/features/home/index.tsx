@@ -277,7 +277,7 @@ function FooterStatus() {
         )}
       >
         <span className={cn("h-1.5 w-1.5 rounded-full", online ? "bg-green-500" : "bg-red-400")} />
-        MFit AI Engine — {online ? "All systems operational" : "API offline"}
+        AltStreet AI Engine — {online ? "All systems operational" : "API offline"}
       </span>
       {version && (
         <>
@@ -306,7 +306,7 @@ export default function HomePage() {
         <div className="text-center mb-5">
           <div className="flex items-center justify-center gap-2 mb-1">
             <Sparkles className="h-5 w-5 text-blue-500" />
-            <h1 className="text-xl font-semibold text-gray-900">MFit Research Workspace</h1>
+            <h1 className="text-xl font-semibold text-gray-900">AltStreet Research Workspace</h1>
           </div>
           <p className="text-sm text-gray-500">
             Ask about funds, rankings, holdings, rules, or data
@@ -319,7 +319,7 @@ export default function HomePage() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Ask MFit anything about funds, rankings, rules, or data…"
+            placeholder="Ask AltStreet anything about funds, rankings, rules, or data…"
             className="flex-1 bg-transparent outline-none text-sm text-gray-700 placeholder:text-gray-400"
             onKeyDown={(e) => {
               if (e.key === "Enter" && query.trim()) {
@@ -351,7 +351,7 @@ export default function HomePage() {
 
         {/* 3-step guided pills */}
         <div className="flex items-center justify-center gap-4 text-xs text-gray-400">
-          {(["Ask MFit", "Review insights", "Open a workspace"] as const).map((step, i) => (
+          {(["Ask AltStreet", "Review insights", "Open a workspace"] as const).map((step, i) => (
             <div key={step} className="flex items-center gap-4">
               <div className="flex flex-col items-center gap-1">
                 <div

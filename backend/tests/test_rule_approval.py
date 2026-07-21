@@ -553,19 +553,30 @@ def test_rule_approval_propagates_with_hand_verified_recompute(
         JOIN selfmade_rule_component rcomp ON rcomp.id = rc.component_id
         JOIN selfmade_ranking_snapshot s ON s.id = rc.snapshot_id
         WHERE s.schemecode = :sc AND s.category = :cat
+          AND s.snapshot_date = (
+              SELECT MAX(snapshot_date) FROM selfmade_ranking_snapshot WHERE category = :cat
+          )
     """), {"sc": TEST_SCHEMECODE, "cat": TEST_CATEGORY}).fetchall()
     pct_by_metric = {r[0]: float(r[1]) for r in before_rows}
     assert set(pct_by_metric.keys()) == set(NEW_WEIGHTS.keys()), (
         f"Test fund must have all 4 components populated today; got {pct_by_metric}"
     )
 
+    # NOTE: a schemecode+category can have MULTIPLE real snapshot_date rows
+    # (recompute_all_rankings() inserts a new dated row per run rather than
+    # updating in place) — without ORDER BY snapshot_date DESC LIMIT 1,
+    # .scalar() picks an arbitrary row, which is exactly the bug found during
+    # the ranking-history-graph session (real gap in query, not just theory:
+    # confirmed 2 real rows for this exact schemecode+category in that session).
     before_score = float(db.execute(text("""
         SELECT composite_score_v2 FROM selfmade_ranking_snapshot
         WHERE schemecode = :sc AND category = :cat
+        ORDER BY snapshot_date DESC LIMIT 1
     """), {"sc": TEST_SCHEMECODE, "cat": TEST_CATEGORY}).scalar())
     before_rank = db.execute(text("""
         SELECT rank_in_category FROM selfmade_ranking_snapshot
         WHERE schemecode = :sc AND category = :cat
+        ORDER BY snapshot_date DESC LIMIT 1
     """), {"sc": TEST_SCHEMECODE, "cat": TEST_CATEGORY}).scalar()
 
     # Hand-compute the expected AFTER composite score from the SAME (weight-
@@ -592,6 +603,9 @@ def test_rule_approval_propagates_with_hand_verified_recompute(
         JOIN selfmade_ranking_contribution rc ON rc.snapshot_id = s.id
         JOIN selfmade_rule_component rcomp ON rcomp.id = rc.component_id
         WHERE s.category = :cat
+          AND s.snapshot_date = (
+              SELECT MAX(snapshot_date) FROM selfmade_ranking_snapshot WHERE category = :cat
+          )
     """), {"cat": TEST_CATEGORY}).fetchall()
     pct_by_scheme: dict[int, dict[str, float]] = {}
     for sc, metric, pct in all_rows:
@@ -640,13 +654,19 @@ def test_rule_approval_propagates_with_hand_verified_recompute(
     assert recompute_summary["funds_scored"] > 0
 
     # ── (b) the fund's composite_score_v2 changed to the CORRECT value ────────
+    # Same ORDER BY snapshot_date DESC LIMIT 1 fix as the BEFORE queries above —
+    # the approve() call just triggered another real recompute_all_rankings()
+    # run, so a 3rd (or Nth) dated row may now exist for this schemecode+
+    # category; without ordering, .scalar() could grab a stale pre-approval row.
     after_score = float(db.execute(text("""
         SELECT composite_score_v2 FROM selfmade_ranking_snapshot
         WHERE schemecode = :sc AND category = :cat
+        ORDER BY snapshot_date DESC LIMIT 1
     """), {"sc": TEST_SCHEMECODE, "cat": TEST_CATEGORY}).scalar())
     after_rank = db.execute(text("""
         SELECT rank_in_category FROM selfmade_ranking_snapshot
         WHERE schemecode = :sc AND category = :cat
+        ORDER BY snapshot_date DESC LIMIT 1
     """), {"sc": TEST_SCHEMECODE, "cat": TEST_CATEGORY}).scalar()
 
     print(f"  ACTUAL  AFTER  composite_score_v2 = {after_score}  rank = {after_rank}")

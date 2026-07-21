@@ -14,7 +14,7 @@ from __future__ import annotations
 
 CHAT_RECOMMENDATION_REFRAME_V1: dict = {
     "answer": (
-        "MFit is a fund research workspace — it surfaces pre-computed metrics, "
+        "AltStreet is a fund research workspace — it surfaces pre-computed metrics, "
         "ranking scores, and structural patterns derived from historical data. "
         "It does not provide investment advice, buy/sell/switch guidance, or "
         "individual suitability assessments.\n\n"

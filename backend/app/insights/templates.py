@@ -1148,7 +1148,7 @@ FUND_HOLDINGS_AVAIL_NONE_V1 = InsightTemplate(
         "**Next step:** check back after the next data refresh cycle.",
     ],
     chip_keys=[],
-    follow_up_label="Check Data Quality page",
+    follow_up_label="Ask about data availability",
     allowed_conclusion_template="Portfolio holdings data is not yet available for this fund.",
     source_tables=["selfmade_portfolio_holding"],
     severity="neutral",
@@ -1598,7 +1598,7 @@ CMP_HOLDINGS_OVERLAP_UNAVAILABLE_V1 = InsightTemplate(
         "**Next step:** available after the next holdings data refresh.",
     ],
     chip_keys=[],
-    follow_up_label="Check Data Quality page",
+    follow_up_label="Ask about data availability",
     allowed_conclusion_template="Holdings overlap could not be computed — portfolio data is missing for one or more compared funds.",
     source_tables=["selfmade_portfolio_holding"],
     severity="neutral",
@@ -1830,33 +1830,37 @@ CMP_LAGGARD_V1 = InsightTemplate(
 )
 
 
-# ── Section 9.3: AI Workspace Lens V1 (LENS_*_V1) ────────────────────────────
+# ── Section 9.3: AI Workspace Lens V1 (LENS_*_V1) — compact format, 2026-07-21 ─
 # Axes are always real DB columns — never the original wireframe's "1Y IR" / "2Y IR Slope"
 # labels which don't exist as built. x_label / y_label come from METRIC_VOCAB at runtime.
+# x_direction_phrase / y_axis_meaning / x_threshold_phrase / y_threshold_phrase are
+# pre-formatted by the caller (app.routers.metrics / app.routers.workspaces) from real
+# facts — never hardcoded per category — so the template itself stays a dumb fill-in.
 
 LENS_QUADRANT_EXPLAINER_V1 = InsightTemplate(
     template_id="LENS_QUADRANT_EXPLAINER_V1",
     page_type="workspace",
     insight_code="lens_quadrant_explainer",
     trigger_code="always",
-    headline_template="Axis guide: {x_label} (x) vs {y_label} (y) — {category}",
-    body_template=(
-        "Each point is one fund in {category}. "
-        "X-axis: {x_label} — {x_description}. "
-        "Y-axis: {y_label} — {y_description}. "
-        "Quadrant thresholds: x splits at the category median ({x_label} = {x_median:.3f}); "
-        "y splits at {y_threshold} "
-        "(positive = structurally improving, negative = declining). "
-        "Improving-strong (top-right): x ≥ median AND y ≥ {y_threshold}. "
-        "Improving-weak (top-left): x < median AND y ≥ {y_threshold}. "
-        "Declining-strong (bottom-right): x ≥ median AND y < {y_threshold}. "
-        "Declining-weak (bottom-left): x < median AND y < {y_threshold}."
-    ),
-    required_variables=[
-        "x_label", "y_label", "category",
-        "x_description", "y_description",
-        "x_median", "y_threshold",
+    compact_variants=[
+        "**Axis guide:** {x_label} (right) vs {y_label} (up) — {fund_count} funds in {category}.",
+        "**How to read this chart:** {x_label} across, {y_label} up — {category} ({fund_count} funds).",
+        "**Chart legend:** each dot is a {category} fund, plotted by {x_label} and {y_label}.",
+        "**Quadrant map:** {fund_count} {category} funds split by {x_label} and {y_label}.",
     ],
+    expanded_bullets=[
+        "Each dot = one **{category}** fund ({fund_count} total).",
+        "Further right = {x_direction_phrase} (**{x_label}**).",
+        "{y_axis_meaning}",
+        "**Dashed lines** split funds into 4 groups using {x_threshold_phrase} and {y_threshold_phrase}.",
+    ],
+    chip_keys=["fund_count", "category", "x_label", "y_label"],
+    follow_up_label="Discuss this chart in Research Chat",
+    allowed_conclusion_template=(
+        "This scatter groups {fund_count} {category} funds into 4 quadrants using "
+        "{x_label} and {y_label} only."
+    ),
+    source_tables=["selfmade_ranking_snapshot", "selfmade_scheme_metrics"],
     severity="neutral",
     priority=1,
 )
@@ -1866,15 +1870,24 @@ LENS_CANDIDATES_FOUND_V1 = InsightTemplate(
     page_type="workspace",
     insight_code="lens_candidates_found",
     trigger_code="count_gt_zero",
-    headline_template="{count} research candidate(s) — {quadrant_label} quadrant",
-    body_template=(
-        "{count} fund(s) in {category} satisfy the structural filter: {filter_summary}. "
-        "Top candidate(s) by {x_label}: {top_candidates}."
-    ),
-    required_variables=[
-        "count", "category", "quadrant_label",
-        "filter_summary", "x_label", "top_candidates",
+    compact_variants=[
+        "**{count} research candidate(s)** found in the {quadrant_label} quadrant of {category}.",
+        "**{quadrant_label} quadrant:** {count} {category} funds qualify.",
+        "**{count} funds** match {quadrant_label} in {category}.",
+        "**Filtered results:** {count} {category} funds sit in {quadrant_label}.",
     ],
+    expanded_bullets=[
+        "**Filter:** {filter_summary}",
+        "**Category:** {category}",
+        "**Top by {x_label}:** {top_candidates}",
+    ],
+    chip_keys=["count", "category", "quadrant_label"],
+    follow_up_label="Open filtered results table",
+    allowed_conclusion_template=(
+        "{count} fund(s) in {category} fall in the {quadrant_label} quadrant "
+        "based on {filter_summary}."
+    ),
+    source_tables=["selfmade_ranking_snapshot", "selfmade_scheme_metrics"],
     severity="positive",
     priority=5,
 )
@@ -1884,12 +1897,24 @@ LENS_CANDIDATES_NONE_V1 = InsightTemplate(
     page_type="workspace",
     insight_code="lens_candidates_none",
     trigger_code="count_zero",
-    headline_template="No funds match the {quadrant_label} quadrant in {category}",
-    body_template=(
-        "The filter '{filter_summary}' returned zero funds in {category}. "
-        "Consider loosening the category filter or switching to a different quadrant."
+    compact_variants=[
+        "**No funds** match {quadrant_label} in {category}.",
+        "**Zero results:** {quadrant_label} quadrant is empty for {category}.",
+        "**No candidates:** nothing in {category} falls into {quadrant_label}.",
+        "**Empty quadrant:** {quadrant_label} has no {category} funds right now.",
+    ],
+    expanded_bullets=[
+        "**Filter:** {filter_summary}",
+        "**Category:** {category}",
+        "**Try:** loosen the filter or switch quadrants.",
+    ],
+    chip_keys=["category", "quadrant_label"],
+    follow_up_label="Adjust filter",
+    allowed_conclusion_template=(
+        "No {category} funds currently fall in the {quadrant_label} quadrant "
+        "based on {filter_summary}."
     ),
-    required_variables=["quadrant_label", "filter_summary", "category"],
+    source_tables=["selfmade_ranking_snapshot", "selfmade_scheme_metrics"],
     severity="neutral",
     priority=10,
 )

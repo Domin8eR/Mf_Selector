@@ -32,7 +32,7 @@ def _row_to_dict(r) -> dict:
         "amc_name": r[2] or "",
         "category": r[3] or "",
         "sub_category": r[4] or "",
-        "aum_cr": round(float(r[5]) / 100, 2) if r[5] else None,  # lakhs → crores
+        "aum_cr": round(float(r[5]), 2) if r[5] else None,  # altstreet_scheme_master.aum is already in crores
         "launch_date": str(r[6]) if r[6] else None,
         "status": r[7] or "",
         "isin": r[8] or "",

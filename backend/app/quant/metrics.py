@@ -48,6 +48,27 @@ def annualised_return(prices: pd.Series) -> float | None:
     return float((end / start) ** (ANNUALISE / n) - 1)
 
 
+def cagr_from_total_return(total_return_fraction: float | None, years: float) -> float | None:
+    """
+    Annualised (CAGR) % from a known total-return fraction over a known
+    calendar-year span — e.g. total_return_fraction=0.26, years=3 -> ~8.0%.
+
+    Calendar-year based, not trading-day-count based, so unlike
+    annualised_return() above it doesn't need a daily price series — just
+    the total return and real elapsed time. Correct for a downsampled or
+    sparse point series (e.g. a chart with ~150 sampled points over several
+    years) where treating point-count as a trading-day count would badly
+    overstate the annualisation.
+
+    Extracted from two identical inline copies (app/routers/metrics.py's
+    bm_cagr, app/ai/tools.py's _bm_cagr) — one calculation, not two kept in
+    sync by hand.
+    """
+    if total_return_fraction is None or years <= 0:
+        return None
+    return round(((1 + total_return_fraction) ** (1 / years) - 1) * 100, 2)
+
+
 def excess_returns(
     fund_returns: pd.Series,
     benchmark_returns: pd.Series,

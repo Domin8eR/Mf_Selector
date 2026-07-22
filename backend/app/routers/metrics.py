@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.db import get_db
 from app.insights.calculator import get_aum_for_fund
+from app.quant.metrics import cagr_from_total_return
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 
@@ -508,12 +509,31 @@ def growth_of_10k(
     db: Session = Depends(get_db),
 ) -> dict:
     """
-    Growth-of-₹10,000 chart data for the fund + benchmark.
+    Indexed % return chart data for the fund + benchmark (2026-07-21: rebased
+    from Rs.10,000 to 100 — the final value reads directly as total % return,
+    e.g. 126 = +26%, and both series being indexed the same way is what makes
+    this a real relative comparison rather than two differently-scaled lines).
 
     Fund series: piecewise exponential interpolation between real NAV anchor points
     from accord_fintech_mf_returns (1yr / 2yr / 3yr / current NAVs with actual dates).
     Benchmark series: real daily TRI from selfmade_index_returns.
-    Both normalised to ₹10,000 at period_start.
+    Both normalised to 100 at period_start.
+
+    2026-07-21: the fund's real NAV anchors can end well before the
+    benchmark's real daily data does (here: fund's last real anchor is
+    2025-11-18, benchmark data runs to 2026-06-30) — plotting the fund line
+    all the way to the benchmark's end date meant silently extrapolating the
+    last real segment's growth rate forward, which also fed into the
+    headline return numbers and made them disagree with
+    /fund/{id}/benchmark-comparison (which correctly only uses real data).
+    Fixed: fund_series now stops at the fund's own last real anchor
+    (fund_data_through) instead of extrapolating to match the benchmark —
+    the benchmark line keeps going, so the gap is visible, not blended into
+    one solid line. The headline fund_return_summary uses the exact same
+    precomputed 1yr/3yr/5yr vendor return selfmade_scheme_returns (and
+    benchmark-comparison) already reads, when the requested period has a
+    direct match — guaranteeing identical numbers, not just a similar
+    calculation.
     """
     sc = int(scheme_id)
 
@@ -578,30 +598,48 @@ def growth_of_10k(
         if bm_base is None:
             bm_base = float(r[1])
         if bm_base and bm_base > 0:
-            bm_series.append({"date": str(r[0]), "value": round(10000 * float(r[1]) / bm_base, 2)})
+            bm_series.append({"date": str(r[0]), "value": round(100 * float(r[1]) / bm_base, 2)})
 
-    # Fund series using piecewise NAV anchor interpolation
+    # Fund series using piecewise NAV anchor interpolation — real data only.
+    # Points beyond the fund's own last real anchor (anchors[-1][0]) are
+    # skipped rather than extrapolated forward to match the benchmark's
+    # longer real range; same for any point before the first anchor.
     anchors = _build_nav_anchors(af_row, period)
     fund_series = []
+    fund_data_through: date | None = None
     if anchors and sampled_bm:
-        # Find NAV at period_start for rebasing to 10,000
-        nav_at_start = _interpolate_nav(period_start, anchors)
+        anchor_first, anchor_last = anchors[0][0], anchors[-1][0]
+        # Find NAV at period_start for rebasing to 100 — clamp to the real
+        # anchor range so this reference point is never itself extrapolated.
+        rebase_date = min(max(period_start, anchor_first), anchor_last)
+        nav_at_start = _interpolate_nav(rebase_date, anchors)
         if nav_at_start and nav_at_start > 0:
             for point in sampled_bm:
                 d = point[0] if isinstance(point[0], date) else point[0]
+                if d < anchor_first or d > anchor_last:
+                    continue
                 nav_d = _interpolate_nav(d, anchors)
                 if nav_d and nav_d > 0:
-                    fund_series.append({"date": str(d), "value": round(10000 * nav_d / nav_at_start, 2)})
+                    fund_series.append({"date": str(d), "value": round(100 * nav_d / nav_at_start, 2)})
+            if anchor_last < today:
+                fund_data_through = anchor_last
 
-    # Fallback: CAGR-based if no anchors
+    # Fallback: CAGR-based ONLY when the fund has no NAV anchors at all (never
+    # recorded any real NAV). This must NOT also fire when anchors exist but
+    # this period's window happens to fall entirely beyond the fund's last
+    # real anchor (e.g. requesting 6M/1M when the fund's real data is
+    # already ~7 months stale) — that used to silently re-introduce a
+    # fabricated, unbounded extrapolated line through the exact same
+    # `if not fund_series` check, defeating the real-data-only fix above.
+    # That case instead leaves fund_series genuinely empty for this period.
     data_note = (
         "Fund series from real NAV anchor points (piecewise exponential interpolation). "
         "Benchmark uses real daily TRI."
     )
-    if not fund_series:
-        sr = db.execute(text("""
-            SELECT fund_1yr_ret, fund_3yr_ret FROM selfmade_scheme_returns WHERE schemecode = :sc
-        """), {"sc": sc}).fetchone()
+    sr = db.execute(text("""
+        SELECT fund_1yr_ret, fund_3yr_ret, fund_5yr_ret FROM selfmade_scheme_returns WHERE schemecode = :sc
+    """), {"sc": sc}).fetchone()
+    if not anchors:
         cagr_pct = float(sr[1] if sr and sr[1] else 12.0)
         years = (today - period_start).days / 365
         total_days = (today - period_start).days
@@ -609,8 +647,56 @@ def growth_of_10k(
         for point in sampled_bm:
             d = point[0]
             frac = (d - period_start).days / max(total_days, 1)
-            fund_series.append({"date": str(d), "value": round(10000 * math.exp(log_total * frac), 2)})
+            fund_series.append({"date": str(d), "value": round(100 * math.exp(log_total * frac), 2)})
         data_note = "Fund series is CAGR-interpolated (no anchor NAV data). Benchmark uses real daily TRI."
+    elif not fund_series:
+        data_note = (
+            f"Fund's real NAV data (through {anchors[-1][0]}) doesn't reach the requested "
+            f"{period} window ({period_start} to {today}) — no fund line is shown for this period "
+            "rather than extrapolating one. Benchmark uses real daily TRI."
+        )
+    elif fund_data_through:
+        data_note += (
+            f" Fund's real NAV data ends {fund_data_through} — the line stops there rather than "
+            "extrapolating to match the benchmark's longer real range."
+        )
+
+    # Total % return + annualised return. Benchmark: indexed-to-100 direct
+    # read (final value 126 -> +26% total), annualised via the same
+    # calendar-year CAGR formula /fund/{id}/benchmark-comparison uses
+    # (app.quant.metrics.cagr_from_total_return). Fund: for 1Y/3Y/5Y, read
+    # the EXACT same precomputed vendor return selfmade_scheme_returns (and
+    # benchmark-comparison) already use — guarantees the two pages show an
+    # identical number for the same fund/period, not just a similarly-real
+    # one. Falls back to the real (non-extrapolated) anchor series for
+    # periods with no direct N-year match (1M/6M/Max).
+    years_span = max((today - period_start).days / 365.25, 1 / 365.25)
+    # period -> (years, index into sr = (fund_1yr_ret, fund_3yr_ret, fund_5yr_ret))
+    fund_vendor_years = {"1Y": (1, 0), "3Y": (3, 1), "5Y": (5, 2)}
+
+    def _benchmark_return_summary() -> dict | None:
+        if not bm_series:
+            return None
+        total_return_pct = round(bm_series[-1]["value"] - 100, 2)
+        annualised_return_pct = cagr_from_total_return(bm_series[-1]["value"] / 100 - 1, years_span)
+        return {"total_return_pct": total_return_pct, "annualised_return_pct": annualised_return_pct}
+
+    def _fund_return_summary() -> dict | None:
+        vendor = fund_vendor_years.get(period)
+        if vendor:
+            years, sr_idx = vendor
+            if sr and sr[sr_idx] is not None:
+                annualised_return_pct = round(float(sr[sr_idx]), 2)
+                total_return_pct = round((((1 + annualised_return_pct / 100) ** years) - 1) * 100, 2)
+                return {"total_return_pct": total_return_pct, "annualised_return_pct": annualised_return_pct}
+        if not fund_series:
+            return None
+        first_d = date.fromisoformat(fund_series[0]["date"])
+        last_d = date.fromisoformat(fund_series[-1]["date"])
+        real_years = max((last_d - first_d).days / 365.25, 1 / 365.25)
+        total_return_pct = round(fund_series[-1]["value"] - 100, 2)
+        annualised_return_pct = cagr_from_total_return(fund_series[-1]["value"] / 100 - 1, real_years)
+        return {"total_return_pct": total_return_pct, "annualised_return_pct": annualised_return_pct}
 
     return {
         "data_version": settings.data_version,
@@ -624,6 +710,9 @@ def growth_of_10k(
         "period_end": str(today),
         "fund_series": fund_series,
         "benchmark_series": bm_series,
+        "fund_data_through": str(fund_data_through) if fund_data_through else None,
+        "fund_return_summary": _fund_return_summary(),
+        "benchmark_return_summary": _benchmark_return_summary(),
         "data_note": data_note,
     }
 
@@ -836,17 +925,12 @@ def fund_benchmark_comparison(
     bm_name = bm_row[0] if bm_row else (sr[6] if sr and sr[6] else "Benchmark")
 
     # Convert bm_*yr_ret from total-return fraction to CAGR %
-    def bm_cagr(total_ret_fraction: float | None, years: float) -> float | None:
-        if total_ret_fraction is None:
-            return None
-        return round(((1 + total_ret_fraction) ** (1 / years) - 1) * 100, 2)
-
     fund_1y = round(float(sr[0]), 2) if sr and sr[0] is not None else None
     fund_3y = round(float(sr[1]), 2) if sr and sr[1] is not None else None
     fund_5y = round(float(sr[2]), 2) if sr and sr[2] is not None else None
-    bm_1y = bm_cagr(float(sr[3]) if sr and sr[3] is not None else None, 1.0)
-    bm_3y = bm_cagr(float(sr[4]) if sr and sr[4] is not None else None, 3.0)
-    bm_5y = bm_cagr(float(sr[5]) if sr and sr[5] is not None else None, 5.0)
+    bm_1y = cagr_from_total_return(float(sr[3]) if sr and sr[3] is not None else None, 1.0)
+    bm_3y = cagr_from_total_return(float(sr[4]) if sr and sr[4] is not None else None, 3.0)
+    bm_5y = cagr_from_total_return(float(sr[5]) if sr and sr[5] is not None else None, 5.0)
 
     def excess(f, b): return round(f - b, 2) if f is not None and b is not None else None
 
@@ -1014,6 +1098,21 @@ def _assign_quadrant(
     return "declining-weak"
 
 
+def _compute_quadrant_counts(points: list[dict]) -> dict[str, int]:
+    """Tally each point's quadrant. One counting implementation, shared by
+    /metrics/lens-scatter and GET /workspaces/{id} — both build a `points`
+    list with a "quadrant" key per point via _assign_quadrant() above."""
+    counts: dict[str, int] = {
+        "improving-strong": 0,
+        "improving-weak": 0,
+        "declining-strong": 0,
+        "declining-weak": 0,
+    }
+    for p in points:
+        counts[p["quadrant"]] = counts.get(p["quadrant"], 0) + 1
+    return counts
+
+
 def _trend_note(ir_slope: float | None, rank_delta: int | None) -> str:
     """One-phrase per-fund trend note for the results table Notes column."""
     parts: list[str] = []
@@ -1129,12 +1228,6 @@ def lens_scatter(
     y_higher_better = _LENS_HIGHER_BETTER.get(y_metric, True)
 
     points: list[dict] = []
-    quadrant_counts: dict[str, int] = {
-        "improving-strong": 0,
-        "improving-weak": 0,
-        "declining-strong": 0,
-        "declining-weak": 0,
-    }
 
     for r in rows:
         x_val = float(r[x_idx]) if r[x_idx] is not None else None
@@ -1145,8 +1238,6 @@ def lens_scatter(
         quadrant = _assign_quadrant(x_val, y_val, x_threshold, y_threshold, y_higher_better)
         if quadrant_filter and quadrant != quadrant_filter:
             continue
-
-        quadrant_counts[quadrant] = quadrant_counts.get(quadrant, 0) + 1
 
         points.append({
             "schemecode":       int(r[0]),
@@ -1181,7 +1272,7 @@ def lens_scatter(
         "y_threshold":        round(y_threshold, 6),
         "quadrant_filter":    quadrant_filter,
         "total_funds":        len(points),
-        "quadrant_counts":    quadrant_counts,
+        "quadrant_counts":    _compute_quadrant_counts(points),
         "points":             points,
         "source_tables":      [
                                   "selfmade_ranking_snapshot",

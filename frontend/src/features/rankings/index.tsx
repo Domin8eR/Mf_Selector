@@ -7,7 +7,7 @@ import {
 } from "lucide-react"
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer,
+  Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts"
 import { cn } from "@/lib/utils"
 import {
@@ -144,16 +144,29 @@ function FundPreviewDrawer({
   const insights = insightsQ.data
   const explainData = explainQ.data
 
+  // Built from the benchmark's dates (the complete, always-real series), not
+  // the fund's — fund_series stops at the fund's own last real NAV anchor
+  // rather than being extrapolated to match a longer benchmark range, so
+  // iterating it alone would silently drop every benchmark date past that
+  // point instead of showing the real gap. See FundDetailPage for the full
+  // (dated, not month-bucketed) version with the "Fund data ends" marker.
   const growthChartData = growth ? (() => {
-    const bmMap = new Map<string, number>(
-      growth.benchmark_series.map((p: GrowthPoint) => [p.date, p.value])
+    const fundMap = new Map<string, number>(
+      growth.fund_series.map((p: GrowthPoint) => [p.date, p.value])
     )
-    return growth.fund_series.map((p: GrowthPoint) => ({
+    return growth.benchmark_series.map((p: GrowthPoint) => ({
       date: p.date.slice(0, 7),
-      fund: p.value,
-      bm: bmMap.get(p.date) ?? null,
+      fund: fundMap.get(p.date) ?? null,
+      bm: p.value,
     }))
   })() : []
+
+  // Month-bucketed x-value where the fund line's real data stops — same
+  // "Fund data ends" marker as FundDetailPage, scaled down for this compact
+  // chart (a text note alone would be easy to miss at this size).
+  const lastFundMonth = growth?.fund_series.length
+    ? growth.fund_series[growth.fund_series.length - 1].date.slice(0, 7)
+    : null
 
   const miniCards = summary ? [
     { label: "IR (3Y)",        value: summary.information_ratio_3yr != null ? summary.information_ratio_3yr.toFixed(3) : "—" },
@@ -261,10 +274,20 @@ function FundPreviewDrawer({
                 </div>
               ) : null}
 
-              {/* Growth of ₹10,000 (3Y) chart — compact */}
+              {/* Indexed % return (3Y) chart — compact */}
               <div>
                 <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">
-                  Growth of ₹10,000 (3Y)
+                  Indexed Return (3Y)
+                  {growth?.fund_return_summary && (
+                    <span className="ml-1.5 text-[10px] text-gray-400 normal-case font-normal">
+                      {growth.fund_return_summary.total_return_pct >= 0 ? "+" : ""}
+                      {growth.fund_return_summary.total_return_pct.toFixed(1)}% total
+                      {growth.fund_return_summary.annualised_return_pct != null && (
+                        <> ({growth.fund_return_summary.annualised_return_pct >= 0 ? "+" : ""}
+                          {growth.fund_return_summary.annualised_return_pct.toFixed(1)}% annualized)</>
+                      )}
+                    </span>
+                  )}
                 </p>
                 {growthQ.isLoading ? (
                   <div className="h-36 animate-pulse bg-gray-100 rounded-lg" />
@@ -274,6 +297,9 @@ function FundPreviewDrawer({
                   <ResponsiveContainer width="100%" height={148}>
                     <LineChart data={growthChartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      {lastFundMonth && growth?.fund_data_through && (
+                        <ReferenceLine x={lastFundMonth} stroke="#f59e0b" strokeDasharray="3 3" />
+                      )}
                       <XAxis
                         dataKey="date"
                         tick={{ fontSize: 8, fill: "#9ca3af" }}
@@ -285,11 +311,11 @@ function FundPreviewDrawer({
                         tickLine={false}
                         axisLine={false}
                         width={40}
-                        tickFormatter={(v: number) => `₹${(v / 1000).toFixed(1)}k`}
+                        tickFormatter={(v: number) => `${Math.round(v)}`}
                       />
                       <Tooltip
                         formatter={(v: unknown) => [
-                          `₹${(v as number).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`,
+                          `${((v as number) - 100 >= 0 ? "+" : "")}${((v as number) - 100).toFixed(1)}%`,
                           "",
                         ]}
                         contentStyle={{ fontSize: 9 }}
@@ -307,6 +333,11 @@ function FundPreviewDrawer({
                   </ResponsiveContainer>
                 ) : (
                   <p className="text-xs text-gray-400 py-2">No chart data available.</p>
+                )}
+                {growth?.fund_data_through && (
+                  <p className="text-[10px] text-amber-700 mt-1">
+                    Fund data ends {growth.fund_data_through} — line continues for the benchmark only.
+                  </p>
                 )}
               </div>
 

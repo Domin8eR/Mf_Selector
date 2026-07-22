@@ -77,11 +77,15 @@ function UnavailableBadge({ reason }: { reason?: string }) {
   )
 }
 
-function MetricCell({ m, suffix = "" }: { m: MetricResult | null | undefined; suffix?: string }) {
+function MetricCell({ m, suffix = "", winner = false }: { m: MetricResult | null | undefined; suffix?: string; winner?: boolean }) {
   if (!m) return <span className="text-gray-300 text-xs">—</span>
   if (m.status === "insufficient_data" || m.value == null)
     return <UnavailableBadge reason={m.confidence} />
-  return <span className="text-xs font-mono">{fmtNum(m.value)}{suffix}</span>
+  return (
+    <span className={cn("text-xs font-mono", winner && "text-green-600 font-semibold")}>
+      {fmtNum(m.value)}{suffix}
+    </span>
+  )
 }
 
 // ── Heatmap row (per fund, used in Layout B) ──────────────────────────────────
@@ -393,13 +397,18 @@ function LayoutA({
               {METRICS_TABLE_ROWS.map(row => {
                 const aVal = row.getter(fa)
                 const bVal = row.getter(fb)
+                // Direction-aware winner already computed backend-side
+                // (build_fund_comparison's _best_sc, lower_better per metric)
+                // — reused here, not re-derived.
+                const aWins = advantages[row.advKey] === fa.schemecode
+                const bWins = advantages[row.advKey] === fb.schemecode
                 return (
                   <tr key={row.key} className="hover:bg-gray-50">
                     <td className="py-2.5 px-4 text-gray-600">{row.label}</td>
-                    <td className={cn("py-2.5 px-3 text-right font-mono", aVal === "Unavailable" && "text-gray-300")}>
+                    <td className={cn("py-2.5 px-3 text-right font-mono", aVal === "Unavailable" && "text-gray-300", aWins && "text-green-600 font-semibold")}>
                       {aVal === "Unavailable" ? <UnavailableBadge /> : aVal}
                     </td>
-                    <td className={cn("py-2.5 px-3 text-right font-mono", bVal === "Unavailable" && "text-gray-300")}>
+                    <td className={cn("py-2.5 px-3 text-right font-mono", bVal === "Unavailable" && "text-gray-300", bWins && "text-green-600 font-semibold")}>
                       {bVal === "Unavailable" ? <UnavailableBadge /> : bVal}
                     </td>
                     <td className="py-2.5 px-3">
@@ -722,8 +731,12 @@ function LayoutB({
                   <td className="py-2.5 px-4 text-gray-600">{row.label}</td>
                   {funds.map(f => {
                     const v = row.getter(f)
+                    // Same direction-aware winner from advantages[row.advKey]
+                    // (backend _best_sc) used for the "Best" column below —
+                    // reused here, not re-derived.
+                    const wins = advantages[row.advKey] === f.schemecode
                     return (
-                      <td key={f.schemecode} className={cn("py-2.5 px-3 text-right font-mono", v === "Unavailable" && "text-gray-300")}>
+                      <td key={f.schemecode} className={cn("py-2.5 px-3 text-right font-mono", v === "Unavailable" && "text-gray-300", wins && "text-green-600 font-semibold")}>
                         {v === "Unavailable" ? <UnavailableBadge /> : v}
                       </td>
                     )
@@ -750,7 +763,7 @@ function LayoutB({
                 <td className="py-2.5 px-4 text-gray-600">Active Share</td>
                 {funds.map(f => (
                   <td key={f.schemecode} className="py-2.5 px-3 text-right">
-                    <MetricCell m={f.active_share} suffix="%" />
+                    <MetricCell m={f.active_share} suffix="%" winner={advantages["active_share"] === f.schemecode} />
                   </td>
                 ))}
                 <td className="py-2.5 px-3 text-center">
@@ -768,7 +781,7 @@ function LayoutB({
                 <td className="py-2.5 px-4 text-gray-600">Expense Ratio</td>
                 {funds.map(f => (
                   <td key={f.schemecode} className="py-2.5 px-3 text-right">
-                    <MetricCell m={f.expense_ratio_pct} suffix="%" />
+                    <MetricCell m={f.expense_ratio_pct} suffix="%" winner={advantages["expense_ratio_pct"] === f.schemecode} />
                   </td>
                 ))}
                 <td className="py-2.5 px-3 text-center">

@@ -495,14 +495,32 @@ class InsightRuleEngine:
         # ratio_3year_monthlyret table (<=1 row/fund, unusable for a 6-12 month trend).
         ir_slope_real = float(metrics_row[3]) if metrics_row and metrics_row[3] is not None else None
         pct_ir = float(snap_row[5]) if snap_row and snap_row[5] is not None else None
-        # Sortino has no governed rule component today (not in METRIC_VOCAB) —
-        # correctly None/insufficient-data rather than reading a frozen value
-        # from the retired selfmade_scheme_ranking table. Defaults to the
-        # same neutral-50 fallback as a missing pct_ir below; the practical
-        # effect is FUND_3Y_PERFORMANCE_STRONG_V1 won't fire on the Sortino
-        # dimension until Sortino re-enters the governed pipeline as a real
-        # rule component — a visible gap, not a silently stale number.
-        pct_sortino = None
+        # Sortino has no governed rule component today (not in METRIC_VOCAB), so
+        # there is no category percentile for it — but sortino_ratio_3yr itself
+        # IS real, populated data for a real subset of funds (78 of 3454 as of
+        # 2026-07-21). Previously this was hardcoded to None and then silently
+        # defaulted to a neutral 50 below, which made
+        # `pct_sortino_eff >= SORTINO_PERCENTILE_STRONG` (50 >= 70) permanently
+        # False for every fund — FUND_3Y_PERFORMANCE_STRONG_V1 could never fire,
+        # and every fund landed on MIXED blaming "Sortino percentile is below
+        # the top-tier threshold" even when Sortino data didn't exist to judge
+        # at all. Fixed below: when sortino3 is real, rank it (percentile, same
+        # 0-100 scale as the other two gates) among every other fund that also
+        # has a real sortino_ratio_3yr, via the same _percentile_rank_in_list
+        # helper POST /compare/funds already uses for radar normalization — one
+        # percentile-ranking implementation, not a new formula. When sortino3
+        # is None, this dimension genuinely can't be evaluated for this fund;
+        # that must surface as "insufficient data", never as neutral/weak.
+        pct_sortino: float | None = None
+        if sortino3 is not None:
+            from app.services.compare_service import _percentile_rank_in_list
+
+            peer_rows = self.db.execute(text("""
+                SELECT sortino_ratio_3yr FROM selfmade_scheme_metrics
+                WHERE sortino_ratio_3yr IS NOT NULL AND schemecode != :sc
+            """), {"sc": schemecode}).fetchall()
+            sortino_values = [float(r[0]) for r in peer_rows] + [sortino3]
+            pct_sortino = _percentile_rank_in_list(sortino_values, len(sortino_values) - 1, lower_better=False)
         pct_active_ret = float(snap_row[6]) if snap_row and snap_row[6] is not None else None
         rank_ic = int(snap_row[0]) if snap_row else None
         total_ic = int(snap_row[1]) if snap_row else None
@@ -524,36 +542,48 @@ class InsightRuleEngine:
             # Outperformance gates on category percentile (from the active rule
             # version's own selfmade_ranking_contribution row) rather than an
             # absolute magic-number cutoff, matching how the IR gate above
-            # already works. Sortino has no governed component yet (see
-            # pct_sortino assignment above) so it's always neutral for now.
-            # Missing percentile defaults to 50 (neutral), same convention as
-            # pct_ir_eff.
-            pct_sortino_eff = pct_sortino if pct_sortino is not None else 50.0
+            # already works. Missing IR/active-return percentile still defaults
+            # to neutral 50 (existing convention — a ranked fund's contribution
+            # row is only rarely absent). Sortino does NOT get that treatment:
+            # sortino3 is None means we have zero evidence for this dimension,
+            # not neutral evidence, so it must not silently count toward either
+            # STRONG or MIXED — see FUND_3Y_PERFORMANCE_INSUFFICIENT_SORTINO_V1
+            # below (2026-07-21 — was previously hardcoded None -> neutral 50,
+            # which made STRONG unreachable for every fund; see pct_sortino
+            # computation above).
+            pct_ir_eff = pct_ir if pct_ir is not None else 50.0
             pct_active_ret_eff = pct_active_ret if pct_active_ret is not None else 50.0
-            good_3y = (
-                pct_ir_eff >= IR_PERCENTILE_STRONG
-                and pct_sortino_eff >= SORTINO_PERCENTILE_STRONG
-                and pct_active_ret_eff >= OUTPERFORMANCE_PERCENTILE_STRONG
-            )
             perf_v = {
                 **_base(fund_name), "ir_3y": round(ir3, 4),
                 "sortino_3y": round(sortino3, 4) if sortino3 is not None else "n/a",
                 "outperformance_ratio_3y_pct": round(pct_active_ret_eff, 0),
                 "rank_in_category": rank_ic, "total_in_category": total_ic,
             }
-            if good_3y:
-                results.append({"template_id": "FUND_3Y_PERFORMANCE_STRONG_V1", "variables": perf_v})
-            else:
-                positive = "3Y IR is in the top tier" if pct_ir_eff >= IR_PERCENTILE_STRONG else "3Y IR is acceptable"
-                concern = (
-                    "Sortino percentile is below the top-tier threshold" if pct_sortino_eff < SORTINO_PERCENTILE_STRONG
-                    else "outperformance percentile is below the top-tier threshold" if pct_active_ret_eff < OUTPERFORMANCE_PERCENTILE_STRONG
-                    else "not all risk-adjusted metrics agree"
-                )
+            if sortino3 is None:
                 results.append({
-                    "template_id": "FUND_3Y_PERFORMANCE_MIXED_V1",
-                    "variables": {**perf_v, "positive_metric_summary": positive, "negative_metric_summary": concern},
+                    "template_id": "FUND_3Y_PERFORMANCE_INSUFFICIENT_SORTINO_V1",
+                    "variables": perf_v,
                 })
+            else:
+                good_3y = (
+                    pct_ir_eff >= IR_PERCENTILE_STRONG
+                    and pct_sortino >= SORTINO_PERCENTILE_STRONG
+                    and pct_active_ret_eff >= OUTPERFORMANCE_PERCENTILE_STRONG
+                )
+                perf_v["sortino_3y_percentile"] = round(pct_sortino, 0)
+                if good_3y:
+                    results.append({"template_id": "FUND_3Y_PERFORMANCE_STRONG_V1", "variables": perf_v})
+                else:
+                    positive = "3Y IR is in the top tier" if pct_ir_eff >= IR_PERCENTILE_STRONG else "3Y IR is acceptable"
+                    concern = (
+                        "Sortino percentile is below the top-tier threshold" if pct_sortino < SORTINO_PERCENTILE_STRONG
+                        else "outperformance percentile is below the top-tier threshold" if pct_active_ret_eff < OUTPERFORMANCE_PERCENTILE_STRONG
+                        else "not all risk-adjusted metrics agree"
+                    )
+                    results.append({
+                        "template_id": "FUND_3Y_PERFORMANCE_MIXED_V1",
+                        "variables": {**perf_v, "positive_metric_summary": positive, "negative_metric_summary": concern},
+                    })
 
         # ── Group 5: Trend (rank + IR slope together) ───────────────────────────
         # ir_slope_real: same selfmade_scheme_metrics.ir_slope_6m_proxy field

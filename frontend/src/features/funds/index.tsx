@@ -290,13 +290,23 @@ export default function FundDetailPage() {
 
   // Growth chart series — full ISO dates kept (not truncated) so the X-axis
   // can format adaptively by period and gridlines can mark real boundaries.
+  // Built from the benchmark's dates (the complete, always-real series) with
+  // fund looked up per date — fund_series now stops at the fund's own last
+  // real NAV anchor (fund_data_through) rather than being extrapolated to
+  // match the benchmark's longer real range, so it's a subset of dates, not
+  // a parallel array; iterating fund_series alone would silently drop every
+  // benchmark date past that point instead of showing the real gap.
   const chartData: Array<{ date: string; fund: number | null; bm: number | null }> = []
   if (growth) {
-    const bmMap = new Map<string, number>(growth.benchmark_series.map((p: GrowthPoint) => [p.date, p.value]))
-    for (const p of growth.fund_series) {
-      chartData.push({ date: p.date, fund: p.value, bm: bmMap.get(p.date) ?? null })
+    const fundMap = new Map<string, number>(growth.fund_series.map((p: GrowthPoint) => [p.date, p.value]))
+    for (const p of growth.benchmark_series) {
+      chartData.push({ date: p.date, fund: fundMap.get(p.date) ?? null, bm: p.value })
     }
   }
+  // Where the fund line's plotted data actually stops (a real sampled date,
+  // unlike fund_data_through which is the anchor's own date and may fall
+  // between samples) — used to mark the real-vs-gap boundary on the chart.
+  const lastFundDate = growth?.fund_series.length ? growth.fund_series[growth.fund_series.length - 1].date : null
   const isShortPeriod = period === "1M" || period === "6M"
 
   // Date-axis formatting and gridline-boundary logic live in utils.ts (pure,
@@ -447,10 +457,25 @@ export default function FundDetailPage() {
 
         {/* ═══ OVERVIEW TAB ═══════════════════════════════════════════════ */}
         <TabsContent value="overview" className="mt-4 space-y-6 pb-24">
-          {/* Growth of 10k chart */}
+          {/* Indexed % return chart */}
           <div className="rounded-xl border bg-card p-4">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-semibold">Growth of ₹10,000</span>
+              <div className="flex items-baseline gap-2">
+                <span className="text-sm font-semibold">Indexed Return</span>
+                {growth?.fund_return_summary && (
+                  <span className={cn(
+                    "text-xs font-medium",
+                    growth.fund_return_summary.total_return_pct >= 0 ? "text-emerald-600" : "text-red-600",
+                  )}>
+                    {growth.fund_return_summary.total_return_pct >= 0 ? "+" : ""}
+                    {growth.fund_return_summary.total_return_pct.toFixed(1)}% total
+                    {growth.fund_return_summary.annualised_return_pct != null && (
+                      <> ({growth.fund_return_summary.annualised_return_pct >= 0 ? "+" : ""}
+                        {growth.fund_return_summary.annualised_return_pct.toFixed(1)}% annualized)</>
+                    )}
+                  </span>
+                )}
+              </div>
               <div className="flex gap-1">
                 {PERIODS.map((p) => (
                   <button
@@ -475,6 +500,14 @@ export default function FundDetailPage() {
                   {boundaryDates.map((d) => (
                     <ReferenceLine key={d} x={d} stroke="#d1d5db" strokeDasharray="2 2" />
                   ))}
+                  {lastFundDate && growth?.fund_data_through && (
+                    <ReferenceLine
+                      x={lastFundDate}
+                      stroke="#f59e0b"
+                      strokeDasharray="3 3"
+                      label={{ value: "Fund data ends", position: "insideTopLeft", fontSize: 9, fill: "#b45309" }}
+                    />
+                  )}
                   <XAxis
                     dataKey="date"
                     tick={{ fontSize: 10 }}
@@ -483,9 +516,13 @@ export default function FundDetailPage() {
                     tickFormatter={axisDateFormatter}
                   />
                   <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false}
-                    tickFormatter={(v: number) => `₹${(v / 1000).toFixed(1)}k`} />
+                    tickFormatter={(v: number) => `${Math.round(v)}`} />
                   <Tooltip
-                    formatter={(v: unknown, name: string) => [`₹${(v as number).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`, name]}
+                    formatter={(v: unknown, name: string) => {
+                      const indexed = v as number
+                      const pct = indexed - 100
+                      return [`${indexed.toFixed(1)} (${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)`, name]
+                    }}
                     labelFormatter={formatTooltipDate}
                   />
                   <Legend
@@ -633,8 +670,13 @@ export default function FundDetailPage() {
                         const payload = entry?.payload as { value: number; pct: number } | undefined
                         const pct = payload?.pct ?? 0
                         const weight = payload?.value
+                        // Self-explanatory without this thread's context: pct is
+                        // this sector's share of the donut (all sectors shown,
+                        // including "Other"); weight is its real % of the fund.
                         return [
-                          weight != null ? `${pct.toFixed(1)}% (wt ${weight.toFixed(1)}%)` : `${pct.toFixed(1)}%`,
+                          weight != null
+                            ? `${pct.toFixed(1)}% of the sector breakdown (${weight.toFixed(1)}% of total fund)`
+                            : `${pct.toFixed(1)}% of the sector breakdown`,
                           name,
                         ]
                       }}

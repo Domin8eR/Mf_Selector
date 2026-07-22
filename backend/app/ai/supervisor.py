@@ -105,9 +105,13 @@ INTENTS = {
     },
     "overlap_search": {
         "keywords": ["overlap between", "overlap with", "common holdings",
-                     "companies in common", "shared holdings", "how much overlap"],
+                     "companies in common", "shared holdings", "how much overlap",
+                     "similar holdings", "similar to", "funds like", "funds similar"],
         "tools": ["compare_holdings_overlap"],
-        "description": "Portfolio overlap between two funds",
+        "description": (
+            "Portfolio overlap between two named funds, OR funds similar to one "
+            "named fund (ranked by holdings overlap across the whole universe)"
+        ),
     },
     "company_exposure": {
         "keywords": ["which funds hold", "who holds", "exposure to", "schemes holding",
@@ -184,7 +188,8 @@ Classify the user query into exactly one intent from this list:
   navigation        — user wants to navigate to a screen or page
   scheme_filter     — user wants to browse/count/group the general scheme universe by AMC, category, AUM, or launch date (NOT a ranked/scored list — that's ranking_explain)
   holdings_lookup   — user wants a single fund's holdings, holding count, or concentration
-  overlap_search    — user wants portfolio overlap between two named funds
+  overlap_search    — user wants portfolio overlap between two named funds, OR wants to find
+                      funds similar to one named fund (holdings-overlap ranked, whole universe)
   company_exposure  — user wants which funds/schemes hold a named company, across the fund universe
   recommendation_request — user is asking for investment advice, buy/sell/switch, or suitability
 
@@ -210,14 +215,21 @@ IMPORTANT: classify as recommendation_request ONLY if the user clearly asks what
 "How many schemes does HDFC run?" → scheme_filter.
 "Top holdings of Mirae Asset Large Cap" → holdings_lookup.
 "Overlap between HDFC Top 100 and Mirae Asset Large Cap" → overlap_search.
+"Which funds hold similar holdings to HDFC Top 100?" → overlap_search, with only
+  params.scheme_identifier_a set (no scheme_identifier_b) — this ranks funds across the
+  whole universe by overlap with the one named fund, it does not need a second fund name.
 "Which funds hold more than 5% in Reliance Industries?" → company_exposure.
 
 For fund_metrics, holdings_lookup, and ranking_explain, extract the schemecode if a numeric
 code is mentioned; otherwise set params.scheme_identifier to the fund name text as written
 and let the tool resolve it, or leave params empty and let the router resolve from context.
-For compare, set params.schemecodes to a list of integer scheme codes if mentioned.
+For compare, set params.schemecodes to a list of integer scheme codes if numeric codes are
+given; otherwise set params.scheme_identifiers to a list of the fund names exactly as written
+(2-4 funds) and let the tool resolve each one.
 For overlap_search, set params.scheme_identifier_a and params.scheme_identifier_b to the two
-fund names as written (or schemecode_a/schemecode_b if numeric codes are given).
+fund names as written (or schemecode_a/schemecode_b if numeric codes are given). For a
+"funds similar to X" query, set only scheme_identifier_a (leave scheme_identifier_b unset) —
+optionally params.limit for how many similar funds to return (default 10, max 25).
 For company_exposure, set params.company_name to the company as written, and params.min_weight_pct
 to a number if the user gives a threshold (e.g. "more than 5%" → 5).
 For scheme_filter, set params.filters to an object with any of: amc, category, sub_category,
@@ -259,6 +271,13 @@ Strict language rules (violations are a compliance failure):
              which is better for you, which I would choose, which edges out
   ALWAYS say: ranked fund, structural improvement, research candidate, composite score,
               ranked by client rule, metric-derived ranking
+
+FUND NAME RESOLUTION — if any tool result includes fund_resolution_note or
+fund_resolution_notes, a free-text fund name you were given matched more than one
+real fund (e.g. Direct vs Regular plan, Growth vs IDCW option). A specific variant
+was picked for you. You MUST mention in answer which variant was used and that other
+real variants exist — do not silently present the picked fund's numbers as if the
+name had only one possible match.
 
 Return ONLY a JSON object (no markdown fences) with this shape:
 {
@@ -575,8 +594,13 @@ def _respond_llm(
     tool_results: list[dict[str, Any]],
     follow_up_payload: dict | None = None,
 ) -> dict[str, Any] | None:
+    # 3000 (not the original 1200): a multi-entity result — compare_funds with
+    # 2-4 funds, each carrying a real coverage_note when it's outside the
+    # governed ranked universe — was silently losing every entity past the
+    # first to this cutoff, and the LLM would fill the gap with a fabricated
+    # "data not provided" instead of the real (honestly degraded) values.
     context = "\n\n".join(
-        f"Tool result {i + 1}:\n{json.dumps(r, default=str)[:1200]}"
+        f"Tool result {i + 1}:\n{json.dumps(r, default=str)[:3000]}"
         for i, r in enumerate(tool_results)
     )
     user_content = (
@@ -718,25 +742,36 @@ def _respond_template(
         funds = result["funds"]
         tpl = copy.deepcopy(CHAT_DIRECT_ANSWER_WITH_TABLE_V1)
         tpl["answer"] = (
-            "Side-by-side metric comparison (source: selfmade_scheme_metrics). "
-            "All values are pre-computed — not generated by AI."
+            "Side-by-side metric comparison (source: selfmade_scheme_metrics, "
+            "selfmade_scheme_returns). All values are pre-computed — not generated by AI."
         )
+        # A free-text fund name that matched more than one real fund (Direct/
+        # Regular x Growth/IDCW variants) must stay visible here, not just in
+        # tool_call_log — the picked variant is never the only real answer.
+        for note in result.get("fund_resolution_notes", []):
+            tpl["answer"] += f" {note}"
         tpl["table_columns"] = ["Metric"] + [f['fund_name'] for f in funds]
+        # funds[i]["metrics"] — same nested shape build_fund_comparison() returns
+        # for POST /compare/funds (app/services/compare_service.py).
         metrics_keys = [
             ("ir_3yr", "IR (3Y)"),
             ("sharpe_3yr", "Sharpe (3Y)"),
-            ("alpha_3yr", "Alpha (3Y)"),
-            ("fund_3yr", "3Y Return"),
-            ("fund_5yr", "5Y Return"),
-            ("active_3yr", "Active Return 3Y"),
+            ("ret_3yr", "3Y Return"),
+            ("ret_5yr", "5Y Return"),
+            ("active_ret_3yr", "Active Return 3Y"),
         ]
         rows = []
         for key, label in metrics_keys:
-            vals = [f.get(key) for f in funds]
+            vals = [f.get("metrics", {}).get(key) for f in funds]
             if any(v is not None for v in vals):
                 rows.append([label] + [
                     f"{v:.3f}" if isinstance(v, float) else "—" for v in vals
                 ])
+        # A fund outside the governed ranked universe still has a row (honest
+        # degradation) — surface its coverage_note rather than a bare metric gap.
+        notes = [f.get("coverage_note") for f in funds]
+        if any(notes):
+            rows.append(["Coverage"] + [n or "—" for n in notes])
         tpl["table_rows"] = rows
         tpl["suggested_next_actions"] = [
             "Show holdings of fund 1",
@@ -837,6 +872,31 @@ def _respond_template(
         ]
         return tpl
 
+    if intent == "overlap_search" and result.get("mode") == "similar_funds":
+        import copy
+        tpl = copy.deepcopy(CHAT_DIRECT_ANSWER_WITH_TABLE_V1)
+        ref = result["reference_fund"]
+        similar = result["similar_funds"]
+        tpl["answer"] = (
+            f"Funds ranked by holdings overlap with **{ref['fund_name']}** "
+            f"(source: selfmade_portfolio_holding)."
+            if similar else
+            f"**{ref['fund_name']}** has real holdings data, but no other fund with "
+            "holdings data shares any common holding with it."
+        )
+        for note in result.get("fund_resolution_notes", []):
+            tpl["answer"] += f" {note}"
+        tpl["table_columns"] = ["Fund", "Common Holdings", "Overlap % (Weight)", "Overlap % (Count)"]
+        tpl["table_rows"] = [
+            [s["fund_name"], s["common_holdings_count"], round(s["overlap_by_weight_pct"], 2), round(s["overlap_by_count_pct"], 2)]
+            for s in similar
+        ]
+        tpl["suggested_next_actions"] = [
+            "Compare the top match against the reference fund directly",
+            "Show the reference fund's full holdings",
+        ]
+        return tpl
+
     if intent == "overlap_search" and "common_holdings" in result:
         import copy
         tpl = copy.deepcopy(CHAT_DIRECT_ANSWER_WITH_TABLE_V1)
@@ -847,6 +907,8 @@ def _respond_template(
             f"{result['overlap_by_count_pct']:.1f}% by count "
             "(source: selfmade_portfolio_holding)."
         )
+        for note in result.get("fund_resolution_notes", []):
+            tpl["answer"] += f" {note}"
         tpl["table_columns"] = ["Company", f"Weight — {result['fund_a']['fund_name']}", f"Weight — {result['fund_b']['fund_name']}"]
         tpl["table_rows"] = [
             [c["company"], round(c["weight_a"], 2), round(c["weight_b"], 2)]

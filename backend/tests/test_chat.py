@@ -5,6 +5,11 @@ Covers:
   - search_documents returns real chunks for seeded funds, empty for non-seeded
   - tool_call_log records every call
   - 1 E2E per intent type using live DB
+  - 2026-07-21 fixes: _resolve_schemecode's Direct+Growth preference order +
+    ambiguity disclosure (was previously silent/arbitrary — LIMIT 1, no
+    ORDER BY), and compare_holdings_overlap's "find funds similar to X"
+    mode (only two-fund overlap existed before; a one-fund-only overlap_search
+    query silently errored with "requires both funds identified")
 """
 
 import pytest
@@ -228,6 +233,71 @@ def test_overlap_search_e2e(client: TestClient):
     tool_names = [tc["tool"] for tc in data["tool_calls"]]
     assert "compare_holdings_overlap" in tool_names
     assert data["result_component_type"] == "table"
+
+
+def test_overlap_search_similar_funds_mode_e2e(client: TestClient):
+    """A one-fund overlap_search ("similar to X") used to silently error with
+    "compare_holdings_overlap requires both funds identified" — no one-to-many
+    holdings-similarity search existed anywhere (confirmed absent in the
+    pre-merge research_chat module too). Must now return real ranked results."""
+    resp = client.post("/chat/query", json={
+        "message": "Which funds hold similar holdings to HDFC Large Cap Fund?"
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["intent"] == "overlap_search"
+    tool_names = [tc["tool"] for tc in data["tool_calls"]]
+    assert "compare_holdings_overlap" in tool_names
+    assert all(tc["ok"] for tc in data["tool_calls"] if tc["tool"] == "compare_holdings_overlap")
+    assert data["result_component_type"] == "table"
+    assert data["table_rows"] and len(data["table_rows"]) > 0
+
+
+def test_compare_holdings_overlap_similar_funds_mode_tool_level(db):
+    """Tool-level (no LLM round trip): real ranked, sorted, real-data results —
+    same overlap definition as the two-fund path, computed set-based."""
+    from app.ai.tools import call_tool
+
+    result = call_tool(
+        "compare_holdings_overlap",
+        {"scheme_identifier_a": "HDFC Large Cap Fund", "limit": 5},
+        db,
+    )
+    db.rollback()
+
+    assert "error" not in result
+    assert result["mode"] == "similar_funds"
+    ref_sc = result["reference_fund"]["schemecode"]
+    similar = result["similar_funds"]
+    assert 0 < len(similar) <= 5
+
+    # Reference fund must never rank against itself.
+    assert all(s["schemecode"] != ref_sc for s in similar)
+    # Ranked descending by overlap weight.
+    weights = [s["overlap_by_weight_pct"] for s in similar]
+    assert weights == sorted(weights, reverse=True)
+    # HDFC Large Cap Fund is ambiguous (8 real Direct/Regular x Growth/IDCW
+    # variants) — the pick must be disclosed, not silent.
+    assert result.get("fund_resolution_notes")
+
+
+def test_resolve_schemecode_prefers_direct_growth_and_discloses_ambiguity(db):
+    """Real DB, the exact 6-variant / 8-variant cases from this session.
+    Mahindra Manulife: Direct+Growth is unique among the 6 matches — preference
+    order fully resolves it, note explains other variants exist. PGIM India:
+    Direct+Growth preference still leaves 2 tied rows (a "Series 2" variant) —
+    note must disclose the tie itself, not just that alternatives exist."""
+    from app.ai.tools import _resolve_schemecode
+
+    sc, name, note = _resolve_schemecode("Mahindra Manulife Large Cap", db)
+    assert sc == 42765
+    assert "Direct Plan" in name and "Growth" in name
+    assert note and "other real match" in note
+
+    sc, name, note = _resolve_schemecode("PGIM India Large Cap", db)
+    assert sc == 18434
+    assert "Direct Plan" in name and "Growth" in name
+    assert note and "tied" in note.lower()
 
 
 def test_company_exposure_e2e(client: TestClient):

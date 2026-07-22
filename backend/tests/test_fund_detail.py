@@ -44,13 +44,36 @@ class TestGrowthOf10k:
         assert len(d["fund_series"]) >= 20, "Expected 20+ data points"
         assert len(d["benchmark_series"]) >= 20
 
-    def test_starts_at_10000(self, client):
+    def test_starts_at_100(self, client):
+        """2026-07-21: rebased from Rs.10,000 to 100 so the final value reads
+        directly as total % return (126 = +26%) — both series indexed the
+        same way, which is what makes this a real relative-comparison chart."""
         r = client.get(f"/metrics/growth-of-10k/{SAMPLE_SC}?period=1Y")
         d = r.json()
         fund = d["fund_series"]
         bm = d["benchmark_series"]
-        assert abs(fund[0]["value"] - 10000) < 1.0, "Fund series should start at ~10000"
-        assert abs(bm[0]["value"] - 10000) < 1.0, "Benchmark series should start at ~10000"
+        assert abs(fund[0]["value"] - 100) < 0.1, "Fund series should start at ~100"
+        assert abs(bm[0]["value"] - 100) < 0.1, "Benchmark series should start at ~100"
+
+    def test_benchmark_return_summary_present_and_consistent(self, client):
+        """benchmark_return_summary: total_return_pct must match the indexed
+        series' own final value, and annualised_return_pct must be internally
+        consistent with it via the same CAGR formula — the benchmark has real
+        daily data through period_end always, so no gap/extrapolation concern
+        applies here (unlike the fund side, see TestGrowthVsBenchmarkComparisonConsistency)."""
+        r = client.get(f"/metrics/growth-of-10k/{SAMPLE_SC}?period=3Y")
+        d = r.json()
+        summary = d["benchmark_return_summary"]
+        series = d["benchmark_series"]
+        assert summary is not None
+        expected_total = round(series[-1]["value"] - 100, 2)
+        assert abs(summary["total_return_pct"] - expected_total) < 0.05
+        years = (
+            __import__("datetime").date.fromisoformat(d["period_end"])
+            - __import__("datetime").date.fromisoformat(d["period_start"])
+        ).days / 365.25
+        expected_annualised = round(((1 + expected_total / 100) ** (1 / years) - 1) * 100, 2)
+        assert abs(summary["annualised_return_pct"] - expected_annualised) < 0.1
 
     def test_fund_grows_with_positive_cagr(self, client):
         r = client.get(f"/metrics/growth-of-10k/{SAMPLE_SC}?period=3Y")
@@ -76,6 +99,43 @@ class TestGrowthOf10k:
         d = r.json()
         assert "data_note" in d
         assert len(d["data_note"]) > 10
+
+
+class TestGrowthVsBenchmarkComparisonConsistency:
+    """2026-07-21 fix: the growth chart's headline fund return used to be
+    derived from a series that silently extrapolated past the fund's last
+    real NAV anchor (pinned to the benchmark's freshness instead), so it
+    disagreed with /fund/{id}/benchmark-comparison's real-data-only number
+    for the same fund. Real case from the previous session: PGIM India Large
+    Cap Fund, schemecode 18434, whose real NAV data (as of 2025-11-18) is
+    ~7 months behind the benchmark's (2026-06-30)."""
+
+    SC = 18434
+
+    @pytest.mark.parametrize("period,bm_comparison_key", [("1Y", "return_1y"), ("3Y", "return_3y"), ("5Y", "return_5y")])
+    def test_annualised_return_matches_benchmark_comparison(self, client, period, bm_comparison_key):
+        growth = client.get(f"/metrics/growth-of-10k/{self.SC}?period={period}").json()
+        bench = client.get(f"/metrics/fund/{self.SC}/benchmark-comparison").json()
+        assert growth["fund_return_summary"] is not None
+        assert growth["fund_return_summary"]["annualised_return_pct"] == bench["fund"][bm_comparison_key]
+
+    def test_fund_line_stops_before_benchmark_and_gap_is_disclosed(self, client):
+        d = client.get(f"/metrics/growth-of-10k/{self.SC}?period=3Y").json()
+        assert d["fund_data_through"] == "2025-11-18"
+        assert d["fund_series"][-1]["date"] < d["benchmark_series"][-1]["date"], (
+            "fund line must not be extrapolated to match the benchmark's longer real range"
+        )
+        assert d["fund_data_through"] in d["data_note"]
+
+    def test_period_entirely_beyond_real_data_yields_no_fabricated_line(self, client):
+        """1M for this fund requests a window entirely after the fund's last
+        real anchor (2025-11-18) — must show no fund line and no fund return
+        (previously this silently fell through to a fabricated CAGR-smoothed
+        line spanning dates with zero real fund data)."""
+        d = client.get(f"/metrics/growth-of-10k/{self.SC}?period=1M").json()
+        assert d["fund_series"] == []
+        assert d["fund_return_summary"] is None
+        assert len(d["benchmark_series"]) > 0, "benchmark must still render on its own"
 
 
 class TestConsistencyHeatmap:
@@ -317,6 +377,51 @@ class TestFundDetailInsights:
         }
         fired = [c for c in cards if c["template_id"] in sector_ids]
         assert len(fired) >= 1, "At least one sector template (or its preserved fallback) should fire"
+
+
+class Test3YPerformanceMissingVsConflictingSortino:
+    """2026-07-21 fix: pct_sortino was hardcoded to None -> silently defaulted
+    to a neutral 50, so `pct_sortino_eff >= SORTINO_PERCENTILE_STRONG` (50 >=
+    70) was always False. FUND_3Y_PERFORMANCE_STRONG_V1 could never fire for
+    any fund, and every fund landed on MIXED blaming a Sortino "weakness"
+    that was actually just absent data. Real funds, real schemecodes."""
+
+    # sortino_ratio_3yr IS NULL for this fund (true of 3376/3454 funds) —
+    # must show the honest insufficient-data state, not Mixed.
+    MISSING_SORTINO_SC = 18434  # PGIM India Large Cap Fund - Direct Plan - Growth
+
+    # sortino_ratio_3yr IS populated (78/3454 funds); IR/active-return real
+    # percentiles genuinely disagree — must still show Mixed, for a real reason.
+    CONFLICTING_SC = 19194  # Tata Large & Mid Cap Fund - Direct Plan - Growth
+
+    # sortino_ratio_3yr populated AND all 3 dimensions genuinely strong —
+    # first real fund able to reach STRONG since this bug existed.
+    STRONG_SC = 46771  # WhiteOak Capital Mid Cap Fund Direct Plan Growth
+
+    def test_missing_sortino_shows_insufficient_not_mixed(self, client):
+        r = client.get(f"/insights/fund/{self.MISSING_SORTINO_SC}")
+        ids = [c["template_id"] for c in r.json()["cards"]]
+        assert "FUND_3Y_PERFORMANCE_INSUFFICIENT_SORTINO_V1" in ids
+        assert "FUND_3Y_PERFORMANCE_MIXED_V1" not in ids
+        assert "FUND_3Y_PERFORMANCE_STRONG_V1" not in ids
+
+    def test_genuinely_conflicting_metrics_still_shows_mixed(self, client):
+        r = client.get(f"/insights/fund/{self.CONFLICTING_SC}")
+        cards = r.json()["cards"]
+        mixed = [c for c in cards if c["template_id"] == "FUND_3Y_PERFORMANCE_MIXED_V1"]
+        assert len(mixed) == 1
+        # The concern must be a real, populated metric gap — never the old
+        # "Sortino percentile is below the top-tier threshold" artifact that
+        # fired even when Sortino had no data to judge at all.
+        body = " ".join(mixed[0].get("expanded_bullets", [])) + mixed[0].get("compact_text", "")
+        assert "not available" not in body.lower()
+
+    def test_strong_is_reachable_for_a_real_fund(self, client):
+        """Before this fix, FUND_3Y_PERFORMANCE_STRONG_V1 could not fire for
+        ANY fund — confirm a real fund now reaches it."""
+        r = client.get(f"/insights/fund/{self.STRONG_SC}")
+        ids = [c["template_id"] for c in r.json()["cards"]]
+        assert "FUND_3Y_PERFORMANCE_STRONG_V1" in ids
 
 
 class TestMultiFundWeightSums:

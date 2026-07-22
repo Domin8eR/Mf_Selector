@@ -6,12 +6,18 @@ Coverage:
   2. Quadrant assignment correctness (hand-checkable fixture)
   3. POST /workspaces creates a real row; GET /workspaces/{id} recomputes live
   4. Recommendation-reframe guard fires for ≥ 2 disguised phrasings
+  5. Save-then-reopen regression: GET /workspaces/{id} must include
+     quadrant_counts (2026-07-21 fix — it was silently missing, which
+     crashed the AI Workspace quadrant legend for every saved workspace)
 """
 
 import pytest
 from unittest.mock import patch, MagicMock
 
+from fastapi.testclient import TestClient
+
 from app.ai.supervisor import classify_lens_query
+from app.main import app
 from app.routers.metrics import _assign_quadrant
 
 
@@ -206,3 +212,43 @@ def test_recommendation_guard_fires_via_interpret_endpoint(disguised_query):
     # Defaults must still be set so the caller can render something
     assert result["x_metric"] == "information_ratio_3yr"
     assert result["y_metric"] == "ir_slope_6m_proxy"
+
+
+# ── 5. Save-then-reopen: quadrant_counts regression ─────────────────────────
+# GET /workspaces/{id} built its own scatter dict and never included
+# quadrant_counts (unlike /metrics/lens-scatter, which does) — the AI
+# Workspace quadrant legend reads scatter.quadrant_counts[quadrant] directly,
+# so opening any saved workspace crashed with a TypeError. Real DB, real
+# save-then-reopen flow — the exact path that was broken.
+
+@pytest.fixture(scope="module")
+def client():
+    """Use real Altstreet_AI DB — selfmade_ tables live there, not in altstreet_test."""
+    with TestClient(app) as c:
+        yield c
+
+
+def test_saved_workspace_reopen_includes_quadrant_counts(client):
+    create_resp = client.post("/workspaces", json={
+        "name": "Regression — quadrant_counts",
+        "category": "Equity — Large Cap",
+        "x_metric": "information_ratio_3yr",
+        "y_metric": "ir_slope_6m_proxy",
+    })
+    assert create_resp.status_code == 201, create_resp.text
+    ws_id = create_resp.json()["id"]
+
+    get_resp = client.get(f"/workspaces/{ws_id}")
+    assert get_resp.status_code == 200, get_resp.text
+    scatter = get_resp.json()["scatter"]
+
+    assert "quadrant_counts" in scatter, (
+        "GET /workspaces/{id} must include quadrant_counts — the AI Workspace "
+        "quadrant legend reads it directly and crashes without it"
+    )
+    counts = scatter["quadrant_counts"]
+    assert set(counts.keys()) == {
+        "improving-strong", "improving-weak", "declining-strong", "declining-weak",
+    }
+    assert sum(counts.values()) == scatter["total_funds"]
+    assert scatter["total_funds"] > 0, "regression fixture must have real ranked funds to be meaningful"

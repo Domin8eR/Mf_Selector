@@ -81,24 +81,96 @@ def _resolve_amc_codes(query: str) -> list[str]:
     return [code for code, name in AMC_CODE_TO_NAME.items() if q in name.lower()]
 
 
-def _resolve_schemecode(identifier: str, db: Session) -> tuple[int, str] | tuple[None, None]:
+def _resolve_schemecode(identifier: str, db: Session) -> tuple[int, str, str | None] | tuple[None, None, None]:
     """Resolve a free-text fund identifier (code, AMFI code, ISIN, or name substring)
-    to (schemecode, scheme_name) via altstreet_scheme_master. Returns (None, None)
-    if nothing matches. Used by tools reachable through free-text chat, where the
-    user names a fund instead of passing its numeric schemecode directly."""
-    from sqlalchemy import text
+    to (schemecode, scheme_name, resolution_note) via altstreet_scheme_master.
+    Returns (None, None, None) if nothing matches at all. Used by tools reachable
+    through free-text chat, where the user names a fund instead of passing its
+    numeric schemecode directly.
 
-    row = db.execute(
+    A name substring routinely matches several real rows for the same underlying
+    fund — Direct/Regular plan x Growth/IDCW option x payout variants (e.g. "PGIM
+    India Large Cap" matches 8 real schemes). Previously this picked whichever row
+    Postgres returned first (LIMIT 1, no ORDER BY) — arbitrary and silent. Now:
+      1. Prefer Direct plan over Regular (accord_fintech_scheme_details.plan — the
+         same lookup Category Rankings' Direct/Regular pill uses, _PLAN_LABELS in
+         app.routers.rankings — not reimplemented here).
+      2. Among those, prefer a Growth option over IDCW/Dividend/Payout (scheme_name
+         text — there is no vetted opt_code mapping elsewhere in the codebase to
+         reuse for this half).
+    resolution_note is None when the match was unambiguous (a single real row, or
+    an exact scheme_id/amfi_code/isin match). It is set whenever more than one
+    real fund matched — including when the preference order above still leaves a
+    tie — so a caller's final answer can disclose that a choice was made instead
+    of presenting the picked schemecode as the only real answer.
+    """
+    from sqlalchemy import text
+    from app.routers.rankings import _PLAN_LABELS
+
+    # Exact key match (scheme_id / amfi_code / isin) identifies one specific row
+    # by construction — no ambiguity possible.
+    exact = db.execute(
         text(
             "SELECT scheme_id, scheme_name FROM altstreet_scheme_master "
-            "WHERE scheme_id = :v OR amfi_code = :v OR isin = :v "
-            "   OR scheme_name ILIKE :vlike LIMIT 1"
+            "WHERE scheme_id = :v OR amfi_code = :v OR isin = :v LIMIT 1"
         ),
-        {"v": identifier, "vlike": f"%{identifier}%"},
+        {"v": identifier},
     ).fetchone()
-    if not row:
-        return None, None
-    return int(row[0]), row[1]
+    if exact:
+        return int(exact[0]), exact[1], None
+
+    rows = db.execute(
+        text(
+            "SELECT asm.scheme_id, asm.scheme_name, sd.plan "
+            "FROM altstreet_scheme_master asm "
+            "LEFT JOIN accord_fintech_scheme_details sd ON sd.schemecode = asm.scheme_id::integer "
+            "WHERE asm.scheme_name ILIKE :vlike "
+            "ORDER BY asm.scheme_id"
+        ),
+        {"vlike": f"%{identifier}%"},
+    ).fetchall()
+
+    if not rows:
+        return None, None, None
+    if len(rows) == 1:
+        return int(rows[0][0]), rows[0][1], None
+
+    def _is_direct(r: Any) -> bool:
+        return _PLAN_LABELS.get(r[2]) == "Direct"
+
+    def _is_growth(r: Any) -> bool:
+        n = r[1].lower()
+        return "growth" in n and "idcw" not in n and "dividend" not in n
+
+    direct_growth = [r for r in rows if _is_direct(r) and _is_growth(r)]
+    direct_any = [r for r in rows if _is_direct(r)]
+    growth_any = [r for r in rows if _is_growth(r)]
+    candidates = direct_growth or direct_any or growth_any or rows
+
+    picked = candidates[0]
+    schemecode, name = int(picked[0]), picked[1]
+    other_names = [r[1] for r in rows if int(r[0]) != schemecode]
+
+    if len(candidates) == 1:
+        note = (
+            f"'{identifier}' matched {len(rows)} real funds (Direct/Regular, "
+            f"Growth/IDCW variants); picked '{name}' (Direct plan + Growth option "
+            f"preferred). {len(other_names)} other real match(es) also exist, "
+            f"e.g. {other_names[0]!r}."
+        )
+    else:
+        # Direct+Growth preference didn't narrow it to one row (e.g. genuinely
+        # duplicate Direct+Growth entries) — the pick among the tied candidates
+        # is arbitrary (lowest scheme_id), and that must stay visible too.
+        tied_names = [r[1] for r in candidates if int(r[0]) != schemecode]
+        note = (
+            f"'{identifier}' matched {len(rows)} real funds, and {len(candidates)} "
+            f"remained tied even after preferring Direct plan + Growth option. "
+            f"Picked '{name}' (schemecode {schemecode}) arbitrarily among the tie — "
+            f"other tied match(es): {tied_names}."
+        )
+
+    return schemecode, name, note
 
 
 def _log_call(
@@ -374,80 +446,86 @@ def _get_rankings_what_changed(params: dict, db: Session) -> dict:
 
 
 def _compare_funds(params: dict, db: Session) -> dict:
-    """Compare multiple funds side-by-side on metrics and returns."""
-    from sqlalchemy import text
+    """Compare multiple funds side-by-side on metrics and returns.
 
-    schemecodes: list[int] = [int(s) for s in params.get("schemecodes", [])]
+    Resolves each fund via schemecodes (already-numeric, e.g. from page
+    context) or scheme_identifiers / scheme_identifier_a+scheme_identifier_b
+    (free-text names — the shape the intent-classifier LLM actually produces
+    for a 2-fund "compare X and Y" query, mirroring compare_holdings_overlap's
+    resolution pattern below), then calls build_fund_comparison() — the same
+    canonical implementation POST /compare/funds uses, so a fund outside the
+    governed ranked universe degrades honestly here too instead of this tool
+    silently requiring numeric codes it was never given.
+    """
+    from app.services.compare_service import build_fund_comparison
+
+    schemecodes: list[int] = []
+    unresolved: list[str] = []
+    resolution_notes: list[str] = []
+
+    for sc in params.get("schemecodes", []):
+        schemecodes.append(int(sc))
+
+    identifiers: list[str] = list(params.get("scheme_identifiers", []))
+    for key in ("scheme_identifier_a", "scheme_identifier_b"):
+        if params.get(key):
+            identifiers.append(params[key])
+
+    for identifier in identifiers:
+        sc, _name, note = _resolve_schemecode(identifier, db)
+        if sc is None:
+            unresolved.append(identifier)
+        else:
+            schemecodes.append(sc)
+            if note:
+                resolution_notes.append(note)
+
+    if unresolved:
+        return {"error": f"Could not resolve fund(s): {', '.join(unresolved)}"}
     if len(schemecodes) < 2:
-        return {"error": "compare_funds requires at least 2 schemecodes"}
-    if len(schemecodes) > 5:
-        schemecodes = schemecodes[:5]
+        return {"error": "compare_funds requires at least 2 funds (schemecodes or scheme_identifiers)"}
 
-    placeholders = ", ".join(f":sc{i}" for i in range(len(schemecodes)))
-    sc_params = {f"sc{i}": sc for i, sc in enumerate(schemecodes)}
+    try:
+        result = build_fund_comparison(db, schemecodes)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
-    metrics_rows = db.execute(
-        text(
-            f"SELECT schemecode, information_ratio_3yr, sharpe_ratio_3yr, "
-            f"       jensens_alpha_3yr, sortino_ratio_3yr, tracking_error_3yr, "
-            f"       outperformed_3yr, ir_slope_6m_proxy, as_of_date "
-            f"FROM selfmade_scheme_metrics WHERE schemecode IN ({placeholders})"
-        ),
-        sc_params,
-    ).fetchall()
-
-    returns_rows = db.execute(
-        text(
-            f"SELECT schemecode, fund_1yr_ret, fund_3yr_ret, fund_5yr_ret, "
-            f"       active_1yr_ret, active_3yr_ret "
-            f"FROM selfmade_scheme_returns WHERE schemecode IN ({placeholders})"
-        ),
-        sc_params,
-    ).fetchall()
-
-    name_rows = db.execute(
-        text(
-            f"SELECT DISTINCT ON (schemecode) schemecode, fund_name "
-            f"FROM selfmade_ranking_snapshot "
-            f"WHERE schemecode IN ({placeholders}) "
-            f"ORDER BY schemecode, snapshot_date DESC"
-        ),
-        sc_params,
-    ).fetchall()
-
-    names = {r[0]: r[1] for r in name_rows}
-    metrics_map = {r[0]: r for r in metrics_rows}
-    returns_map = {r[0]: r for r in returns_rows}
-
-    funds = []
-    for sc in schemecodes:
-        m = metrics_map.get(sc)
-        ret = returns_map.get(sc)
-        entry: dict = {
-            "schemecode": sc,
-            "fund_name": names.get(sc, str(sc)),
-        }
-        if m:
-            entry["ir_3yr"] = float(m[1]) if m[1] is not None else None
-            entry["sharpe_3yr"] = float(m[2]) if m[2] is not None else None
-            entry["alpha_3yr"] = float(m[3]) if m[3] is not None else None
-            entry["sortino_3yr"] = float(m[4]) if m[4] is not None else None
-            entry["tracking_error"] = float(m[5]) if m[5] is not None else None
-            entry["outperformed_3yr"] = bool(m[6]) if m[6] is not None else None
-            entry["ir_slope"] = float(m[7]) if m[7] is not None else None
-            entry["as_of_date"] = str(m[8]) if m[8] else None
-        if ret:
-            entry["fund_1yr"] = float(ret[1]) if ret[1] is not None else None
-            entry["fund_3yr"] = float(ret[2]) if ret[2] is not None else None
-            entry["fund_5yr"] = float(ret[3]) if ret[3] is not None else None
-            entry["active_1yr"] = float(ret[4]) if ret[4] is not None else None
-            entry["active_3yr"] = float(ret[5]) if ret[5] is not None else None
-        funds.append(entry)
-
-    return {
-        "source_tables": ["selfmade_scheme_metrics", "selfmade_scheme_returns"],
-        "funds": funds,
+    # Trim to what a chat answer needs. build_fund_comparison() also returns
+    # holdings_overlap (pairs/common_holdings/sector_table), radar_data, and
+    # rank_history for the Fund Comparison page's charts — none of that is
+    # relevant to a text/table chat answer, and including it pushed a single
+    # tool result well past generate_response's per-result context budget
+    # (_respond_llm truncates each tool result to 3000 chars), silently
+    # cutting off the second/third fund's metrics before the LLM ever saw them.
+    trimmed: dict = {
+        "source_tables": result["source_tables"],
+        "funds": [
+            {
+                "schemecode": f["schemecode"],
+                "fund_name": f["fund_name"],
+                "amc_name": f["amc_name"],
+                "category": f["category"],
+                "rank": f["rank"],
+                "composite_score": f["composite_score"],
+                "status_label": f["status_label"],
+                "coverage_note": f["coverage_note"],
+                "as_of_date": f["as_of_date"],
+                "metrics": f["metrics"],
+                "active_share": f["active_share"].get("value"),
+                "portfolio_stability": f["portfolio_stability"].get("value"),
+                "expense_ratio_pct": f["expense_ratio_pct"].get("value"),
+                "aum_cr": f["aum_cr"],
+            }
+            for f in result["funds"]
+        ],
     }
+    # Which real fund a free-text name resolved to, when more than one real
+    # fund matched it — must stay visible in the final answer, not just in
+    # the tool_call_log, so the resolved variant is never presented as if it
+    # were the only real match.
+    if resolution_notes:
+        trimmed["fund_resolution_notes"] = resolution_notes
+    return trimmed
 
 
 def _get_holdings(params: dict, db: Session) -> dict:
@@ -466,8 +544,9 @@ def _get_holdings(params: dict, db: Session) -> dict:
 
     schemecode = int(params["schemecode"]) if params.get("schemecode") else None
     fund_name_hint = None
+    resolution_note = None
     if schemecode is None and params.get("scheme_identifier"):
-        schemecode, fund_name_hint = _resolve_schemecode(params["scheme_identifier"], db)
+        schemecode, fund_name_hint, resolution_note = _resolve_schemecode(params["scheme_identifier"], db)
         if schemecode is None:
             return {"error": f"No scheme found matching '{params['scheme_identifier']}'"}
     if schemecode is None:
@@ -540,6 +619,9 @@ def _get_holdings(params: dict, db: Session) -> dict:
             "top_5_pct": round(sum(weights[:5]), 4),
             "herfindahl_index": round(sum(w ** 2 for w in weights), 4),
         }
+
+    if resolution_note:
+        result["fund_resolution_note"] = resolution_note
 
     return result
 
@@ -914,17 +996,14 @@ def _get_benchmark_comparison(params: dict, db: Session) -> dict:
 
     bm_name = bm_row[0] if bm_row else (sr[6] if sr and sr[6] else "Benchmark")
 
-    def _bm_cagr(total_ret_frac: float | None, years: float) -> float | None:
-        if total_ret_frac is None:
-            return None
-        return round(((1 + total_ret_frac) ** (1 / years) - 1) * 100, 2)
+    from app.quant.metrics import cagr_from_total_return
 
     fund_1y = round(float(sr[0]), 2) if sr and sr[0] is not None else None
     fund_3y = round(float(sr[1]), 2) if sr and sr[1] is not None else None
     fund_5y = round(float(sr[2]), 2) if sr and sr[2] is not None else None
-    bm_1y = _bm_cagr(float(sr[3]) if sr and sr[3] is not None else None, 1.0)
-    bm_3y = _bm_cagr(float(sr[4]) if sr and sr[4] is not None else None, 3.0)
-    bm_5y = _bm_cagr(float(sr[5]) if sr and sr[5] is not None else None, 5.0)
+    bm_1y = cagr_from_total_return(float(sr[3]) if sr and sr[3] is not None else None, 1.0)
+    bm_3y = cagr_from_total_return(float(sr[4]) if sr and sr[4] is not None else None, 3.0)
+    bm_5y = cagr_from_total_return(float(sr[5]) if sr and sr[5] is not None else None, 5.0)
 
     def _excess(f: float | None, b: float | None) -> float | None:
         return round(f - b, 2) if f is not None and b is not None else None
@@ -1117,8 +1196,9 @@ def _get_cap_exposure(params: dict, db: Session) -> dict:
 
     identifier = params.get("scheme_identifier")
     schemecode = int(params["schemecode"]) if params.get("schemecode") else None
+    resolution_note = None
     if schemecode is None and identifier:
-        schemecode, _ = _resolve_schemecode(identifier, db)
+        schemecode, _name, resolution_note = _resolve_schemecode(identifier, db)
         if schemecode is None:
             return {"error": f"No scheme found matching '{identifier}'"}
 
@@ -1130,7 +1210,7 @@ def _get_cap_exposure(params: dict, db: Session) -> dict:
         ).fetchone()
         if not row:
             return {"error": f"No cap exposure data for schemecode {schemecode}"}
-        return {
+        result = {
             "source_tables": [sm, mc],
             "scheme_id": row[0],
             "fund_name": row[1],
@@ -1138,6 +1218,9 @@ def _get_cap_exposure(params: dict, db: Session) -> dict:
             "mid_cap_pct": float(row[3]) if row[3] is not None else None,
             "small_cap_pct": float(row[4]) if row[4] is not None else None,
         }
+        if resolution_note:
+            result["fund_resolution_note"] = resolution_note
+        return result
 
     clauses = ["s.scheme_id = m.scheme_id"]
     q_params: dict = {}
@@ -1233,19 +1316,126 @@ def _get_company_exposure(params: dict, db: Session) -> dict:
     }
 
 
-def _compare_holdings_overlap(params: dict, db: Session) -> dict:
-    """Portfolio overlap between two funds — aggregate metrics + per-company breakdown.
+def _weights_for_scheme(sc: int, db: Session) -> dict[str, float]:
+    """{company_name: weight_pct} for a scheme's latest real holdings snapshot.
+    The one canonical holdings-overlap computation both compare_holdings_overlap
+    modes below build on — pairwise (two named funds) and one-to-many (find
+    funds similar to one named fund) must never define "overlap" differently."""
+    from sqlalchemy import text
 
-    Consolidates calculate_overlap (aggregate: common count, overlap % by count
-    and by weight) and compare_schemes_holdings (per-company weight_a/weight_b
-    breakdown) — same underlying computation, different aggregation, so this
-    returns both instead of registering two near-duplicate overlap tools.
+    date_row = db.execute(
+        text("SELECT MAX(as_of_date) FROM selfmade_portfolio_holding WHERE scheme_id = :sc"),
+        {"sc": sc},
+    ).fetchone()
+    if not date_row or not date_row[0]:
+        return {}
+    rows = db.execute(
+        text("SELECT sm.company_name, ph.holding_weight_pct FROM selfmade_portfolio_holding ph "
+             "JOIN selfmade_security_master sm ON sm.id = ph.security_id "
+             "WHERE ph.scheme_id = :sc AND ph.as_of_date = :d"),
+        {"sc": sc, "d": date_row[0]},
+    ).fetchall()
+    return {r[0]: float(r[1] or 0) for r in rows}
+
+
+def _similar_funds_by_holdings(sc_a: int, map_a: dict[str, float], db: Session, limit: int) -> list[dict]:
+    """Rank every other fund with real holdings data by overlap against fund
+    A — same overlap definition as the two-fund path above (sum of min(weight_a,
+    weight_b) for common holdings; count-based % too), computed set-based in one
+    query instead of a per-fund Python loop calling _weights_for_scheme() (473
+    funds currently carry real holdings data — an N+1 loop would be ~1000
+    queries for a single chat request)."""
+    from sqlalchemy import text
+
+    if not map_a:
+        return []
+
+    companies = list(map_a.keys())
+    weights = [map_a[c] for c in companies]
+
+    rows = db.execute(
+        text("""
+            WITH target AS (
+                SELECT unnest(CAST(:companies AS text[])) AS company_name,
+                       unnest(CAST(:weights AS float[])) AS w
+            ),
+            latest_dates AS (
+                SELECT scheme_id, MAX(as_of_date) AS d
+                FROM selfmade_portfolio_holding
+                WHERE scheme_id != :sc_a
+                GROUP BY scheme_id
+            ),
+            other_holdings AS (
+                SELECT ph.scheme_id, sm.company_name, ph.holding_weight_pct AS w
+                FROM selfmade_portfolio_holding ph
+                JOIN latest_dates ld ON ld.scheme_id = ph.scheme_id AND ld.d = ph.as_of_date
+                JOIN selfmade_security_master sm ON sm.id = ph.security_id
+            ),
+            per_scheme_counts AS (
+                SELECT scheme_id, COUNT(*) AS n FROM other_holdings GROUP BY scheme_id
+            ),
+            matched AS (
+                SELECT oh.scheme_id,
+                       COUNT(*) AS common_count,
+                       SUM(LEAST(oh.w, t.w)) AS overlap_weight
+                FROM other_holdings oh
+                JOIN target t ON t.company_name = oh.company_name
+                GROUP BY oh.scheme_id
+            )
+            SELECT
+                m.scheme_id,
+                COALESCE(asm.scheme_name, 'Fund ' || m.scheme_id::text) AS fund_name,
+                m.common_count,
+                m.overlap_weight,
+                GREATEST(psc.n, :target_count) AS denom
+            FROM matched m
+            JOIN per_scheme_counts psc ON psc.scheme_id = m.scheme_id
+            LEFT JOIN altstreet_scheme_master asm ON asm.scheme_id::integer = m.scheme_id
+            ORDER BY m.overlap_weight DESC
+            LIMIT :lim
+        """),
+        {
+            "companies": companies,
+            "weights": weights,
+            "sc_a": sc_a,
+            "target_count": len(companies),
+            "lim": limit,
+        },
+    ).fetchall()
+
+    return [
+        {
+            "schemecode": int(r[0]),
+            "fund_name": r[1],
+            "common_holdings_count": int(r[2]),
+            "overlap_by_weight_pct": round(float(r[3]), 4),
+            "overlap_by_count_pct": round(int(r[2]) / max(int(r[4]), 1) * 100, 2),
+        }
+        for r in rows
+    ]
+
+
+def _compare_holdings_overlap(params: dict, db: Session) -> dict:
+    """Portfolio overlap — two modes on the same underlying computation.
+
+    Two funds identified (schemecode_a/b or scheme_identifier_a/b): aggregate
+    metrics + per-company weight_a/weight_b breakdown. Consolidates the old
+    calculate_overlap + compare_schemes_holdings (same computation, different
+    aggregation) into one tool rather than two near-duplicates.
+
+    Only ONE fund identified: "which funds hold similar holdings to X" — a
+    real capability that never actually existed (confirmed absent in the
+    pre-merge research_chat module too, not just dropped during the merge).
+    Ranks every other fund with real holdings data by the same overlap
+    definition (_similar_funds_by_holdings), instead of erroring with
+    "requires both funds" the way this tool did before.
+
     Reads selfmade_portfolio_holding, same source as get_holdings, so a fund's
     overlap numbers are always consistent with its individual holdings list.
     """
     from sqlalchemy import text
 
-    def _resolve(key_code: str, key_id: str) -> tuple[int, str] | tuple[None, None]:
+    def _resolve(key_code: str, key_id: str) -> tuple[int, str, str | None] | tuple[None, None, None]:
         if params.get(key_code):
             sc = int(params[key_code])
             row = db.execute(
@@ -1253,33 +1443,44 @@ def _compare_holdings_overlap(params: dict, db: Session) -> dict:
                      "ORDER BY snapshot_date DESC LIMIT 1"),
                 {"sc": sc},
             ).fetchone()
-            return sc, (row[0] if row else str(sc))
+            return sc, (row[0] if row else str(sc)), None
         if params.get(key_id):
             return _resolve_schemecode(params[key_id], db)
-        return None, None
+        return None, None, None
 
-    sc_a, name_a = _resolve("schemecode_a", "scheme_identifier_a")
-    sc_b, name_b = _resolve("schemecode_b", "scheme_identifier_b")
-    if sc_a is None or sc_b is None:
-        return {"error": "compare_holdings_overlap requires both funds identified "
+    sc_a, name_a, note_a = _resolve("schemecode_a", "scheme_identifier_a")
+    sc_b, name_b, note_b = _resolve("schemecode_b", "scheme_identifier_b")
+
+    if sc_a is None and sc_b is None:
+        return {"error": "compare_holdings_overlap requires at least one fund identified "
                           "(schemecode_a/b or scheme_identifier_a/b)"}
 
-    def _weights(sc: int) -> dict[str, float]:
-        date_row = db.execute(
-            text("SELECT MAX(as_of_date) FROM selfmade_portfolio_holding WHERE scheme_id = :sc"),
-            {"sc": sc},
-        ).fetchone()
-        if not date_row or not date_row[0]:
-            return {}
-        rows = db.execute(
-            text("SELECT sm.company_name, ph.holding_weight_pct FROM selfmade_portfolio_holding ph "
-                 "JOIN selfmade_security_master sm ON sm.id = ph.security_id "
-                 "WHERE ph.scheme_id = :sc AND ph.as_of_date = :d"),
-            {"sc": sc, "d": date_row[0]},
-        ).fetchall()
-        return {r[0]: float(r[1] or 0) for r in rows}
+    # One fund only — "find similar funds" mode.
+    if sc_a is None or sc_b is None:
+        sc, name, note = (sc_a, name_a, note_a) if sc_a is not None else (sc_b, name_b, note_b)
+        map_ref = _weights_for_scheme(sc, db)
+        if not map_ref:
+            return {"error": f"No holdings found for schemecode {sc}"}
 
-    map_a, map_b = _weights(sc_a), _weights(sc_b)
+        limit = min(int(params.get("limit", 10)), 25)
+        similar = _similar_funds_by_holdings(sc, map_ref, db, limit)
+
+        result: dict = {
+            "source_tables": ["selfmade_portfolio_holding", "selfmade_security_master"],
+            "mode": "similar_funds",
+            "reference_fund": {"schemecode": sc, "fund_name": name},
+            "similar_funds": similar,
+        }
+        if not similar:
+            result["data_note"] = (
+                f"'{name}' has real holdings data but no other fund with holdings "
+                "data shares any common holding with it."
+            )
+        if note:
+            result["fund_resolution_notes"] = [note]
+        return result
+
+    map_a, map_b = _weights_for_scheme(sc_a, db), _weights_for_scheme(sc_b, db)
     if not map_a or not map_b:
         return {"error": f"No holdings found for schemecode {sc_a if not map_a else sc_b}"}
 
@@ -1287,7 +1488,7 @@ def _compare_holdings_overlap(params: dict, db: Session) -> dict:
     overlap_weight_pct = round(sum(min(map_a[n], map_b[n]) for n in common), 4)
     overlap_count_pct = round(len(common) / max(len(map_a), len(map_b), 1) * 100, 2)
 
-    return {
+    result: dict = {
         "source_tables": ["selfmade_portfolio_holding", "selfmade_security_master"],
         "fund_a": {"schemecode": sc_a, "fund_name": name_a},
         "fund_b": {"schemecode": sc_b, "fund_name": name_b},
@@ -1299,6 +1500,10 @@ def _compare_holdings_overlap(params: dict, db: Session) -> dict:
             for n in sorted(common, key=lambda n: map_a[n], reverse=True)
         ],
     }
+    notes = [n for n in (note_a, note_b) if n]
+    if notes:
+        result["fund_resolution_notes"] = notes
+    return result
 
 
 _REGISTRY: dict[str, Any] = {

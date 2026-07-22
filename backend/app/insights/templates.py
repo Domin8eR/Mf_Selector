@@ -1410,6 +1410,43 @@ FUND_3Y_IR_WEAK_V1 = InsightTemplate(
 
 # — Group 4: 3Y overall performance scorecard —
 
+# FUND_3Y_PERFORMANCE_INSUFFICIENT_SORTINO_V1 (2026-07-21): the STRONG/MIXED
+# gate needs real Sortino data as one of its 3 dimensions. sortino_ratio_3yr is
+# only populated for a real subset of funds (78 of 3454) — for the rest, this
+# fires instead of MIXED, which previously silently defaulted a missing
+# Sortino to a neutral score and always reported it as the "concern" dragging
+# every fund down to Mixed, even when IR and active return were both strong.
+# Same insufficient-data pattern as FUND_3Y_IR_INSUFFICIENT_HISTORY_V1 —
+# named for the specific missing dimension rather than a generic "no data".
+FUND_3Y_PERFORMANCE_INSUFFICIENT_SORTINO_V1 = InsightTemplate(
+    template_id="FUND_3Y_PERFORMANCE_INSUFFICIENT_SORTINO_V1",
+    page_type="fund_detail",
+    insight_code="3y_performance",
+    trigger_code="sortino_missing",
+    compact_variants=[
+        "**3Y view:** can't fully classify — Sortino data unavailable for this fund.",
+        "**3Y scorecard:** incomplete — no Sortino ratio on file for this fund.",
+        "**3Y quality:** IR and active return are available, but Sortino is not.",
+        "**3Y signal:** partial — Sortino data is missing, not weak.",
+    ],
+    expanded_bullets=[
+        "**3Y IR:** {ir_3y}",
+        "**Sortino:** not available for this fund",
+        "**Outperformance ratio:** {outperformance_ratio_3y_pct}%",
+        "**Why:** a full Strong/Mixed classification needs all 3 metrics populated; Sortino is missing, not weak.",
+    ],
+    chip_keys=["ir_3y", "outperformance_ratio_3y_pct"],
+    follow_up_label="Open available 3Y metrics",
+    allowed_conclusion_template=(
+        "This fund's 3-year performance cannot be fully classified — Sortino ratio data "
+        "is not available for this fund, though IR ({ir_3y}) and outperformance ratio "
+        "({outperformance_ratio_3y_pct}%) are."
+    ),
+    source_tables=["selfmade_scheme_metrics"],
+    severity="neutral",
+    priority=13,
+)
+
 FUND_3Y_PERFORMANCE_STRONG_V1 = InsightTemplate(
     template_id="FUND_3Y_PERFORMANCE_STRONG_V1",
     page_type="fund_detail",

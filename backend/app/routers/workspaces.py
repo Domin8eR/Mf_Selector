@@ -220,7 +220,7 @@ def get_workspace(
 
     from app.routers.metrics import (
         _LENS_LABELS, _LENS_HIGHER_BETTER,
-        _LENS_Y_THRESHOLD, _assign_quadrant, _trend_note,
+        _LENS_Y_THRESHOLD, _assign_quadrant, _compute_quadrant_counts, _trend_note,
     )
 
     rows = db.execute(text("""
@@ -313,6 +313,7 @@ def get_workspace(
             "x_threshold":  round(x_threshold, 6),
             "y_threshold":  round(y_threshold, 6),
             "total_funds":  len(points),
+            "quadrant_counts": _compute_quadrant_counts(points),
             "points":       points,
         },
         "insights": insights,
